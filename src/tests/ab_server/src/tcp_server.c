@@ -52,9 +52,14 @@ static THREAD_FUNC(tcp_client_connection_handler, raw_client_ptr)
 
     info("Got new client connection, going into processing loop.");
 
+    /* FIXME - this needs to include the header overhead for the size! */
     client->request = client->buffer;
+    buf_set_len(&(client->request), client->conn_config.client_to_server_max_packet);
+    client->response = client->buffer;
+    buf_set_len(&(client->response), client->conn_config.server_to_client_max_packet);
 
     buf_set_cursor(&(client->request), 0);
+    buf_set_cursor(&(client->response), 0);
 
     do {
         rc = TCP_CLIENT_PROCESSED;
@@ -86,8 +91,16 @@ static THREAD_FUNC(tcp_client_connection_handler, raw_client_ptr)
                 break;
             } else {
                 /* all good. Reset the buffers etc. */
+
+                /* FIXME - this needs to include the header overhead for the size! */
                 client->request = client->buffer;
+                buf_set_len(&(client->request), client->conn_config.client_to_server_max_packet);
                 client->response = client->buffer;
+                buf_set_len(&(client->response), client->conn_config.server_to_client_max_packet);
+
+                buf_set_cursor(&(client->request), 0);
+                buf_set_cursor(&(client->response), 0);
+
                 rc = TCP_CLIENT_PROCESSED;
             }
         } else {

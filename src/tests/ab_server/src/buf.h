@@ -91,7 +91,11 @@ inline static uint16_t buf_remaining_space(buf_t *buf) {
 }
 
 inline static bool buf_in_bounds(buf_t *buf, uint16_t range_len) {
-    return (buf->data_length - buf->cursor >= range_len) ? true : false;
+    if(buf->cursor + range_len > buf->data_length) {
+        return false;
+    } else {
+	return true;
+    }
 }
 
 
