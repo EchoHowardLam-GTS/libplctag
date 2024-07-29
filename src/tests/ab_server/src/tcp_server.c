@@ -64,6 +64,7 @@ static THREAD_FUNC(tcp_client_connection_handler, raw_client_ptr)
 
         if(rc < 0) {
             info("WARN: error response reading socket! error %d", rc);
+            perror("SOCKET READ ERROR");
             rc = TCP_CLIENT_DONE;
             break;
         }
@@ -79,6 +80,7 @@ static THREAD_FUNC(tcp_client_connection_handler, raw_client_ptr)
             /* error writing? */
             if(rc < 0) {
                 info("ERROR: error writing output packet! Error: %d", rc);
+                perror("SOCKET WRITE ERROR:");
                 rc = TCP_CLIENT_DONE;
                 done = true;
                 break;
@@ -142,7 +144,7 @@ void tcp_server_run(const char *host, const char *port, int (*handler)(tcp_clien
     }
 
     do {
-        info("Waiting for new client connection.");
+        //info("Waiting for new client connection.");
 
         /* FIXME - use select or something similar here to wait for something to do. */
         client_fd = socket_accept(listen_fd);

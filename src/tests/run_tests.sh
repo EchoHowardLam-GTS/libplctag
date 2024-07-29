@@ -213,25 +213,21 @@ else
 fi
 
 
-# start many copies of the emulator.
-PORT_LIST=""
-for i in {1..50}; do
-    let PORT=44818+i
-
-    PORT_LIST+="${PORT} "
-
-    $TEST_DIR/ab_server --plc=ControlLogix --port=$PORT --path=1,0 --tag=TestBigArray:DINT[2000]  > ab_emulator_${PORT}.log 2>&1 &
-    if [ $? != 0 ]; then
-        echo "Unable to start AB/ControlLogix emulator!"
-        exit 1
-    fi
-done
+$TEST_DIR/ab_server --plc=ControlLogix --path=1,0 --tag=TestBigArray:DINT[2000] --debug  > ab_emulator.log 2>&1 &
+EMULATOR_PID=$!
+if [ $? != 0 ]; then
+    # echo "FAILURE"
+    echo "Unable to start AB/ControlLogix emulator!"
+    exit 1
+# else
+    # echo "OK"
+fi
 
 sleep 3
 
 let TEST++
 echo -n "Test $TEST: test huge number of tags... "
-$TEST_DIR/test_many_tag_perf ${PORT_LIST} > "${TEST}_many_tag_perf_test.log" 2>&1
+$TEST_DIR/test_many_tag_perf 100 > "${TEST}_many_tag_perf_test.log" 2>&1
 if [ $? != 0 ]; then
     echo "FAILURE"
     let FAILURES++

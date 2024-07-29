@@ -116,11 +116,7 @@ inline static bool buf_set_uint8(buf_t *buf, uint8_t val) {
 }
 
 inline static uint8_t *buf_peek_bytes(buf_t *buf) {
-    if(buf->cursor < buf->data_length) {
-        return &(buf->data[buf->cursor]);
-    } else {
-        return NULL;
-    }
+    return &(buf->data[buf->cursor]);
 }
 
 inline static bool buf_match_bytes(buf_t *buf, const uint8_t *data, uint16_t data_len) {

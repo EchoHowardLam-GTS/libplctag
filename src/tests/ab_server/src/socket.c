@@ -283,11 +283,12 @@ int socket_read(int sock, buf_t *in_buf)
 #endif
             rc = 0;
         } else {
+            perror("SOCKET READ ERROR");
             info("Socket read error rc=%d.\n", rc);
             rc = SOCKET_ERR_READ;
         }
 
-        info("WARN: Socket read returned zero or error.");
+        //info("WARN: Socket read returned zero or error.");
     } else {
         /* grow the buf size to include the data we just read. */
         buf_set_len(in_buf, buf_len(in_buf) + (uint16_t)rc);

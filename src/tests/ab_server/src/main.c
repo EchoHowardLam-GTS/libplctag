@@ -743,6 +743,12 @@ int request_handler(struct tcp_client *client)
             if(client->conn_config.response_delay > 0) {
                 util_sleep_ms(client->conn_config.response_delay);
             }
+
+            if(rc == EIP_OK) {
+                rc = TCP_CLIENT_PROCESSED;
+            } else {
+                rc = TCP_CLIENT_BAD_REQUEST;
+            }
         } else {
             rc = TCP_CLIENT_INCOMPLETE;
         }

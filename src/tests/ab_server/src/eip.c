@@ -220,6 +220,10 @@ int register_session(tcp_client_p client, eip_header_s *header)
     buf_set_uint16_le(response, register_request.eip_version);
     buf_set_uint16_le(response, register_request.option_flags);
 
+    /* cap off response */
+
+    buf_set_len(response, buf_get_cursor(response));
+
     return EIP_OK;
 }
 

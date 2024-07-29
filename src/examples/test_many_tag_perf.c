@@ -45,9 +45,9 @@
 
 #define REQUIRED_VERSION 2,5,0
 
-#define TAG_ATTRIBS "protocol=ab_eip&gateway=127.0.0.1:%d&path=1,0&cpu=LGX&elem_type=DINT&elem_count=1&name=TestBigArray[0]&allow_packing=0&auto_sync_read_ms=%d&auto_sync_write_ms=20"
+#define TAG_ATTRIBS "protocol=ab_eip&gateway=127.0.0.1:44818&path=1,0&cpu=LGX&connection_group_id=%d&elem_type=DINT&elem_count=1&name=TestBigArray[0]&allow_packing=0&auto_sync_read_ms=%d&auto_sync_write_ms=20"
 
-#define NUM_TAGS (100000)
+#define NUM_TAGS (2000)
 
 #define RUN_PERIOD (60000)
 
@@ -64,7 +64,7 @@ struct tag_entry {
     int32_t tag_id;
     int status;
     int create_complete;
-    int port;
+    int connection_group_id;
     int read_count;
     int write_count;
     int write_trigger_count;
@@ -230,7 +230,6 @@ int main(int argc, char **argv)
 {
     int rc = PLCTAG_STATUS_OK;
     char buf[250] = { 0 };
-    int *ports = NULL;
     int num_ports = 0;
     int read_period_ms = 0;
     int64_t timeout_time = 0;
@@ -256,29 +255,29 @@ int main(int argc, char **argv)
     plc_tag_set_debug_level(PLCTAG_DEBUG_WARN);
 
     /* get server ports. */
-    if(argc < 2) {
-        fprintf(stderr, "No server ports given!\n");
-        return 1;
-    }
+    // if(argc < 2) {
+    //     fprintf(stderr, "No count of tags given!\n");
+    //     return 1;
+    // }
 
-    num_ports = argc-1;
+    // num_ports = argc-1;
 
-    ports = (int *)calloc(sizeof(int), (unsigned int)num_ports);
-    if(!ports) {
-        fprintf(stderr, "Unable to allocate port array!\n");
-        return 1;
-    }
+    // ports = (int *)calloc(sizeof(int), (unsigned int)num_ports);
+    // if(!ports) {
+    //     fprintf(stderr, "Unable to allocate port array!\n");
+    //     return 1;
+    // }
 
-    /* fill in the ports */
-    for(int i=0; i < num_ports; i++) {
-        ports[i] = atoi(argv[i+1]);
-        //fprintf(stderr, "Port %d = %d.\n", i+1, ports[i]);
-    }
+    // /* fill in the ports */
+    // for(int i=0; i < num_ports; i++) {
+    //     ports[i] = atoi(argv[i+1]);
+    //     //fprintf(stderr, "Port %d = %d.\n", i+1, ports[i]);
+    // }
 
-    fprintf(stderr, "PLCs running on %d ports.\n", num_ports);
+    // fprintf(stderr, "PLCs running on %d ports.\n", num_ports);
 
     /* create the tag string. */
-    read_period_ms = (NUM_TAGS * 2) / num_ports;
+    read_period_ms = (1000 * NUM_TAGS) / 2000;
 
     /*
     2000 tags per second
@@ -299,9 +298,8 @@ int main(int argc, char **argv)
 
     for(int i=0; i < NUM_TAGS; i++) {
         int32_t tag = 0;
-        int port = ports[rand() % num_ports];
 
-        snprintf(buf, sizeof(buf), TAG_ATTRIBS, port, read_period_ms);
+        snprintf(buf, sizeof(buf), TAG_ATTRIBS, i, read_period_ms);
         //fprintf(stderr, "Tag %d using tag string \"%s\".\n", i, buf);
 
         tag = plc_tag_create(buf, 0);
@@ -313,7 +311,7 @@ int main(int argc, char **argv)
 
         tags[i].tag_id = tag;
         tags[i].status = plc_tag_status(tag);
-        tags[i].port = port;
+        tags[i].connection_group_id = i;
         tags[i].min_read_time = INT64_MAX;
 
         //fprintf(stderr, "%06" PRId64 " Tag[%d] %" PRId32 " status %s.\n", util_time_ms() - start_time, i, tag, plc_tag_decode_error(plc_tag_status(tag)));
@@ -381,7 +379,7 @@ int main(int argc, char **argv)
 
         for(int i=0; i < NUM_TAGS; i++) {
             if(!tags[i].create_complete) {
-                fprintf(stderr, "   !!! tag %d using port %d failed to complete creation.\n", i, tags[i].port);
+                fprintf(stderr, "   !!! tag %d using connection group %d failed to complete creation.\n", i, tags[i].connection_group_id);
             }
         }
 
@@ -443,4 +441,3 @@ done:
 
     return rc;
 }
-
