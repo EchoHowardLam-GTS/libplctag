@@ -124,7 +124,7 @@ int64_t util_time_ms(void)
     return  ((int64_t)tv.tv_sec*1000)+ ((int64_t)tv.tv_usec/1000);
 }
 
-#endif 
+#endif
 
 
 /*
@@ -189,30 +189,47 @@ void info_impl(const char *func, int line, const char *templ, ...)
 }
 
 
-#define COLUMNS (size_t)(10)
+#define COLUMNS (size_t)(16)
 
-void slice_dump(slice_s s)
+void buf_dump(buf_t *buf)
+{
+    buf_dump_offset(buf, 0);
+}
+
+
+void buf_dump_offset(buf_t *buf, uint16_t data_offset)
 {
     size_t max_row, row, column;
     char row_buf[300]; /* MAGIC */
+    uint16_t old_cursor = buf_get_cursor(buf);
+    uint16_t data_len = 0;
 
     if(!debug_is_on) {
         return;
     }
 
+    if(data_offset > buf_len(buf)) {
+        info("WARN: offset is larger than the buffer length!");
+        return;
+    }
+
+    data_len = buf_len(buf) - data_offset;
+
     /* determine the number of rows we will need to print. */
-    max_row = (slice_len(s)  + (COLUMNS - 1))/COLUMNS;
+    max_row = (data_len + (COLUMNS - 1))/COLUMNS;
+
+    /* set the cursor */
+    buf_set_cursor(buf, data_offset);
 
     for(row = 0; row < max_row; row++) {
         size_t offset = (row * COLUMNS);
-        size_t row_offset;
+        size_t row_offset = 0;
 
         /* print the prefix and address */
-        row_offset = (size_t)snprintf(&row_buf[0], sizeof(row_buf),"%03zu", offset);
+        row_offset = (size_t)snprintf(&row_buf[0], sizeof(row_buf),"%04zu", data_offset + offset);
 
-        for(column = 0; column < COLUMNS && ((row * COLUMNS) + column) < slice_len(s) && row_offset < (int)sizeof(row_buf); column++) {
-            offset = (row * COLUMNS) + column;
-            row_offset += (size_t)snprintf(&row_buf[row_offset], sizeof(row_buf) - row_offset, " %02x", slice_get_uint8(s, offset));
+        for(column = 0; column < COLUMNS && offset < buf_len(buf) && row_offset < (int)sizeof(row_buf); offset++, column++) {
+            row_offset += (size_t)snprintf(&row_buf[row_offset], sizeof(row_buf) - row_offset, " %02x", buf_get_uint8(buf));
         }
 
         /* zero terminate */
@@ -226,6 +243,7 @@ void slice_dump(slice_s s)
         /* output it, finally */
         fprintf(stderr,"%s\n", row_buf);
     }
+
+    /* set the cursor back to where it was */
+    buf_set_cursor(buf, old_cursor);
 }
-
-

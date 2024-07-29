@@ -33,7 +33,7 @@
 
 #pragma once
 
-#include "slice.h"
+#include "buf.h"
 
 typedef enum {
     SOCKET_STATUS_OK    = -1,
@@ -52,6 +52,5 @@ typedef enum {
 extern int socket_open(const char *host, const char *port);
 extern void socket_close(int sock);
 extern int socket_accept(int sock);
-extern slice_s socket_read(int sock, slice_s in_buf);
-extern int socket_write(int sock, slice_s out_buf);
-
+extern int socket_read(int sock, buf_t *in_buf);
+extern int socket_write(int sock, buf_t *out_buf);

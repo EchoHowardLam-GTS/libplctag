@@ -34,6 +34,16 @@
 #pragma once
 
 #include "plc.h"
-#include "slice.h"
+#include "buf.h"
+#include "tcp_server.h"
 
-extern slice_s dispatch_pccc_request(slice_s input, slice_s output, plc_s *context);
+enum {
+    PCCC_OK = 0,
+
+    PCCC_ERR_ADDR_NOT_USABLE = 0x06,
+    PCCC_ERR_FILE_IS_WRONG_SIZE = 0x07,
+    PCCC_ERR_UNSUPPORTED_COMMAND = 0x0e,
+
+};
+
+extern int dispatch_pccc_request(tcp_client_p client);

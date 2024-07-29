@@ -35,7 +35,7 @@
 
 #include <stdint.h>
 #include "compat.h"
-#include "slice.h"
+#include "buf.h"
 
 extern int util_sleep_ms(int ms);
 extern int64_t util_time_ms(void);
@@ -50,4 +50,5 @@ void debug_off(void);
 extern void error_impl(const char *func, int line, const char *templ, ...);
 #define info(...) info_impl(__func__, __LINE__, __VA_ARGS__)
 extern void info_impl(const char *func, int line, const char *templ, ...);
-extern void slice_dump(slice_s s);
+extern void buf_dump(buf_t *buf);
+extern void buf_dump_offset(buf_t *buf, uint16_t offset);

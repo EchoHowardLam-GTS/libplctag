@@ -50,7 +50,7 @@
 
 #include "eip.h"
 #include "plc.h"
-#include "slice.h"
+#include "buf.h"
 #include "tcp_server.h"
 #include "utils.h"
 
@@ -59,7 +59,7 @@ static void process_args(int argc, const char **argv, plc_s *plc);
 static void parse_path(const char *path, plc_s *plc);
 static void parse_pccc_tag(const char *tag, plc_s *plc);
 static void parse_cip_tag(const char *tag, plc_s *plc);
-static slice_s request_handler(slice_s input, slice_s output, void *plc);
+static int request_handler(tcp_client_p client);
 
 
 #ifdef IS_WINDOWS
@@ -145,10 +145,8 @@ void setup_break_handler(void)
 
 int main(int argc, const char **argv)
 {
-    tcp_server_p server = NULL;
-    uint8_t buf[4200];  /* CIP only allows 4002 for the CIP request, but there is overhead. */
-    slice_s server_buf = slice_make(buf, sizeof(buf));
     plc_s plc;
+    size_t buffer_size = 8192;
 
     /* set up handler for ^C etc. */
     setup_break_handler();
@@ -164,11 +162,7 @@ int main(int argc, const char **argv)
     process_args(argc, argv, &plc);
 
     /* open a server connection and listen on the right port. */
-    server = tcp_server_create("0.0.0.0", (plc.port_str ? plc.port_str : "44818"), server_buf, request_handler, &plc);
-
-    tcp_server_start(server, &done);
-
-    tcp_server_destroy(server);
+    tcp_server_run("0.0.0.0", (plc.port_str ? plc.port_str : "44818"), request_handler, buffer_size, &plc, &done, NULL);
 
     return 0;
 }
@@ -222,7 +216,7 @@ void process_args(int argc, const char **argv, plc_s *plc)
     bool has_tag = false;
 
     /* make sure that the reject FO count is zero. */
-    plc->reject_fo_count = 0;
+    plc->default_conn_config.reject_fo_count = 0;
 
     for(int i=0; i < argc; i++) {
         if(strncmp(argv[i],"--plc=",6) == 0) {
@@ -241,8 +235,8 @@ void process_args(int argc, const char **argv, plc_s *plc)
                 plc->path[4] = (uint8_t)0x24;
                 plc->path[5] = (uint8_t)0x01;
                 plc->path_len = 6;
-                plc->client_to_server_max_packet = 504;
-                plc->server_to_client_max_packet = 504;
+                plc->default_conn_config.client_to_server_max_packet = 504;
+                plc->default_conn_config.server_to_client_max_packet = 504;
                 needs_path = true;
                 has_plc = true;
             } else if(str_cmp_i(&(argv[i][6]), "Micro800") == 0) {
@@ -253,8 +247,8 @@ void process_args(int argc, const char **argv, plc_s *plc)
                 plc->path[2] = (uint8_t)0x24;
                 plc->path[3] = (uint8_t)0x01;
                 plc->path_len = 4;
-                plc->client_to_server_max_packet = 504;
-                plc->server_to_client_max_packet = 504;
+                plc->default_conn_config.client_to_server_max_packet = 504;
+                plc->default_conn_config.server_to_client_max_packet = 504;
                 needs_path = false;
                 has_plc = true;
             } else if(str_cmp_i(&(argv[i][6]), "Omron") == 0) {
@@ -277,8 +271,8 @@ void process_args(int argc, const char **argv, plc_s *plc)
                 plc->path[14] = (uint8_t)0x24;
                 plc->path[15] = (uint8_t)0x01;
                 plc->path_len = 16;
-                plc->client_to_server_max_packet = 504;
-                plc->server_to_client_max_packet = 504;
+                plc->default_conn_config.client_to_server_max_packet = 504;
+                plc->default_conn_config.server_to_client_max_packet = 504;
                 needs_path = false;
                 has_plc = true;
             } else if(str_cmp_i(&(argv[i][6]), "PLC/5") == 0) {
@@ -289,8 +283,8 @@ void process_args(int argc, const char **argv, plc_s *plc)
                 plc->path[2] = (uint8_t)0x24;
                 plc->path[3] = (uint8_t)0x01;
                 plc->path_len = 4;
-                plc->client_to_server_max_packet = 244;
-                plc->server_to_client_max_packet = 244;
+                plc->default_conn_config.client_to_server_max_packet = 244;
+                plc->default_conn_config.server_to_client_max_packet = 244;
                 needs_path = false;
                 has_plc = true;
             } else if(str_cmp_i(&(argv[i][6]), "SLC500") == 0) {
@@ -301,8 +295,8 @@ void process_args(int argc, const char **argv, plc_s *plc)
                 plc->path[2] = (uint8_t)0x24;
                 plc->path[3] = (uint8_t)0x01;
                 plc->path_len = 4;
-                plc->client_to_server_max_packet = 244;
-                plc->server_to_client_max_packet = 244;
+                plc->default_conn_config.client_to_server_max_packet = 244;
+                plc->default_conn_config.server_to_client_max_packet = 244;
                 needs_path = false;
                 has_plc = true;
             } else if(str_cmp_i(&(argv[i][6]), "Micrologix") == 0) {
@@ -313,8 +307,8 @@ void process_args(int argc, const char **argv, plc_s *plc)
                 plc->path[2] = (uint8_t)0x24;
                 plc->path[3] = (uint8_t)0x01;
                 plc->path_len = 4;
-                plc->client_to_server_max_packet = 244;
-                plc->server_to_client_max_packet = 244;
+                plc->default_conn_config.client_to_server_max_packet = 244;
+                plc->default_conn_config.server_to_client_max_packet = 244;
                 needs_path = false;
                 has_plc = true;
             } else {
@@ -348,14 +342,14 @@ void process_args(int argc, const char **argv, plc_s *plc)
         if(strncmp(argv[i],"--reject_fo=", 12) == 0) {
             if(plc) {
                 info("Setting reject ForwardOpen count to %d.", atoi(&argv[i][12]));
-                plc->reject_fo_count = atoi(&argv[i][12]);
+                plc->default_conn_config.reject_fo_count = atoi(&argv[i][12]);
             }
         }
 
         if(strncmp(argv[i],"--delay=", 8) == 0) {
             if(plc) {
                 info("Setting response delay to %dms.", atoi(&argv[i][8]));
-                plc->response_delay = atoi(&argv[i][8]);
+                plc->default_conn_config.response_delay = atoi(&argv[i][8]);
             }
         }
     }
@@ -422,6 +416,8 @@ void parse_pccc_tag(const char *tag_str, plc_s *plc)
     if(!tag) {
         error("Unable to allocate memory for new tag!");
     }
+
+    mutex_create(&(tag->mutex));
 
     /* try to match the two parts of a tag definition string. */
 
@@ -554,6 +550,7 @@ void parse_pccc_tag(const char *tag_str, plc_s *plc)
  *     REAL - 4-byte floating point number.  Requires array size(s).
  *     LREAL - 8-byte floating point number.  Requires array size(s).
  *     STRING - 82-byte string with 4-byte count word and 2 bytes of padding.
+ *     BOOL - single bit returned as a byte.
  *
  * Array size field is one or more (up to 3) numbers separated by commas.
  */
@@ -728,26 +725,31 @@ void parse_cip_tag(const char *tag_str, plc_s *plc)
  * request type handler.
  */
 
-slice_s request_handler(slice_s input, slice_s output, void *plc_arg)
+int request_handler(struct tcp_client *client)
 {
-    plc_s *plc = (plc_s*)plc_arg;
+    int rc = TCP_CLIENT_DONE;
+    buf_t *request = &(client->request);
 
     /* check to see if we have a full packet. */
-    if(slice_len(input) >= EIP_HEADER_SIZE) {
-        uint16_t eip_len = slice_get_uint16_le(input, 2);
+    if(buf_len(request) >= EIP_HEADER_SIZE) {
+        buf_set_cursor(&(client->request), 2);
 
-        if(slice_len(input) >= (size_t)(EIP_HEADER_SIZE + eip_len)) {
-            slice_s resp = eip_dispatch_request(input, output, plc);
+        uint16_t eip_len = buf_get_uint16_le(request);
+
+        if(buf_len(request) >= (uint16_t)((uint16_t)EIP_HEADER_SIZE + eip_len)) {
+            rc = eip_dispatch_request(client);
 
             /* if there is a response delay requested, then wait a bit. */
-            if(plc->response_delay > 0) {
-                util_sleep_ms(plc->response_delay);
+            if(client->conn_config.response_delay > 0) {
+                util_sleep_ms(client->conn_config.response_delay);
             }
-
-            return resp;
+        } else {
+            rc = TCP_CLIENT_INCOMPLETE;
         }
+    } else {
+        rc = TCP_CLIENT_INCOMPLETE;
     }
 
     /* we do not have a complete packet, get more data. */
-    return slice_make_err(TCP_SERVER_INCOMPLETE);
+    return rc;
 }

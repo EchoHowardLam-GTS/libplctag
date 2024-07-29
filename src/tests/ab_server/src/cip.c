@@ -38,7 +38,8 @@
 #include "eip.h"
 #include "pccc.h"
 #include "plc.h"
-#include "slice.h"
+#include "buf.h"
+#include "tcp_server.h"
 #include "utils.h"
 
 
@@ -67,64 +68,63 @@ const uint8_t CIP_FORWARD_OPEN_EX[] = { 0x5B, 0x02, 0x20, 0x06, 0x24, 0x01 };
 
 #define CIP_SYMBOLIC_SEGMENT_MARKER ((uint8_t)0x91)
 
-/* CIP Errors */
-
-#define CIP_OK                  ((uint8_t)0x00)
-#define CIP_ERR_0x01            ((uint8_t)0x01)
-#define CIP_ERR_FRAG            ((uint8_t)0x06)
-#define CIP_ERR_UNSUPPORTED     ((uint8_t)0x08)
-#define CIP_ERR_EXTENDED        ((uint8_t)0xff)
-
-#define CIP_ERR_EX_TOO_LONG     ((uint16_t)0x2105)
-
 typedef struct {
     uint8_t service_code;   /* why is the operation code _before_ the path? */
     uint8_t path_size;      /* size in 16-bit words of the path */
-    slice_s path;           /* store this in a slice to avoid copying */
+    buf_t path;           /* store this in a slice to avoid copying */
 } cip_header_s;
 
-static slice_s handle_forward_open(slice_s input, slice_s output, plc_s *plc);
-static slice_s handle_forward_close(slice_s input, slice_s output, plc_s *plc);
-static slice_s handle_read_request(slice_s input, slice_s output, plc_s *plc);
-static slice_s handle_write_request(slice_s input, slice_s output, plc_s *plc);
+static int handle_forward_open(tcp_client_p client);
+static int handle_forward_close(tcp_client_p client);
+static int handle_read_request(tcp_client_p client);
+static int handle_write_request(tcp_client_p client);
 
-static bool process_tag_segment(plc_s *plc, slice_s input, tag_def_s **tag, size_t *start_read_offset);
-static slice_s make_cip_error(slice_s output, uint8_t cip_cmd, uint8_t cip_err, bool extend, uint16_t extended_error);
-static bool match_path(slice_s input, bool need_pad, uint8_t *path, uint8_t path_len);
+static int process_tag_segment(tcp_client_p client, tag_def_s **tag);
+static bool make_cip_error(buf_t *response, uint8_t cip_cmd, uint8_t cip_err, bool extend, uint16_t extended_error);
+static int match_path(buf_t *request, bool need_pad, uint8_t *path, uint8_t path_len);
 
-slice_s cip_dispatch_request(slice_s input, slice_s output, plc_s *plc)
+
+
+
+int cip_dispatch_request(tcp_client_p client)
 {
+    int rc = CIP_OK;
+    buf_t *request = &(client->request);
+    buf_t *response = &(client->response);
+    uint16_t cip_start_offset = buf_get_cursor(request);
+
     info("Got packet:");
-    slice_dump(input);
+    buf_dump(request);
 
     /* match the prefix and dispatch. */
-    if(slice_match_bytes(input, CIP_READ, sizeof(CIP_READ))) {
+    if(buf_match_bytes(request, CIP_READ, sizeof(CIP_READ))) {
         info("Case CIP_READ");
-        return handle_read_request(input, output, plc);
-    } else if(slice_match_bytes(input, CIP_READ_FRAG, sizeof(CIP_READ_FRAG))) {
+        return handle_read_request(client);
+    } else if(buf_match_bytes(request, CIP_READ_FRAG, sizeof(CIP_READ_FRAG))) {
         info("Case CIP_READ_FRAG");
-        return handle_read_request(input, output, plc);
-    } else if(slice_match_bytes(input, CIP_WRITE, sizeof(CIP_WRITE))) {
+        return handle_read_request(client);
+    } else if(buf_match_bytes(request, CIP_WRITE, sizeof(CIP_WRITE))) {
         info("Case CIP_WRITE");
-        return handle_write_request(input, output, plc);
-    } else if(slice_match_bytes(input, CIP_WRITE_FRAG, sizeof(CIP_WRITE_FRAG))) {
+        return handle_write_request(client);
+    } else if(buf_match_bytes(request, CIP_WRITE_FRAG, sizeof(CIP_WRITE_FRAG))) {
         info("Case CIP_WRITE_FRAG");
-        return handle_write_request(input, output, plc);
-    } else if(slice_match_bytes(input, CIP_FORWARD_OPEN, sizeof(CIP_FORWARD_OPEN))) {
+        return handle_write_request(client);
+    } else if(buf_match_bytes(request, CIP_FORWARD_OPEN, sizeof(CIP_FORWARD_OPEN))) {
         info("Case CIP_FORWARD_OPEN");
-        return handle_forward_open(input, output, plc);
-    } else if(slice_match_bytes(input, CIP_FORWARD_OPEN_EX, sizeof(CIP_FORWARD_OPEN_EX))) {
+        return handle_forward_open(client);
+    } else if(buf_match_bytes(request, CIP_FORWARD_OPEN_EX, sizeof(CIP_FORWARD_OPEN_EX))) {
         info("Case CIP_FORWARD_OPEN_EX");
-        return handle_forward_open(input, output, plc);
-    } else if(slice_match_bytes(input, CIP_FORWARD_CLOSE, sizeof(CIP_FORWARD_CLOSE))) {
+        return handle_forward_open(client);
+    } else if(buf_match_bytes(request, CIP_FORWARD_CLOSE, sizeof(CIP_FORWARD_CLOSE))) {
         info("Case CIP_FORWARD_CLOSE");
-        return handle_forward_close(input, output, plc);
-    } else if(slice_match_bytes(input, CIP_PCCC_EXECUTE, sizeof(CIP_PCCC_EXECUTE))) {
+        return handle_forward_close(client);
+    } else if(buf_match_bytes(request, CIP_PCCC_EXECUTE, sizeof(CIP_PCCC_EXECUTE))) {
         info("Case CIP_PCCC_EXECUTE");
-        return dispatch_pccc_request(input, output, plc);
+        return dispatch_pccc_request(client);
     } else {
         info("Case NOT EXPECTED!");
-            return make_cip_error(output, (uint8_t)(slice_get_uint8(input, 0) | (uint8_t)CIP_DONE), (uint8_t)CIP_ERR_UNSUPPORTED, false, (uint16_t)0);
+            make_cip_error(response, (uint8_t)(buf_get_uint8(request) | (uint8_t)CIP_DONE), (uint8_t)CIP_ERR_UNSUPPORTED, false, (uint16_t)0);
+            return CIP_ERR_UNSUPPORTED;
     }
 }
 
@@ -145,7 +145,7 @@ typedef struct {
     uint32_t server_to_client_rpi;          /* target to us RPI, in microseconds */
     uint32_t server_to_client_conn_params;       /* some sort of identifier of what kind of PLC the target is ??? */
     uint8_t transport_class;                /* ALWAYS 0xA3, server transport, class 3, application trigger */
-    slice_s path;                           /* connection path. */
+    buf_t path;                           /* connection path. */
 } forward_open_s;
 
 /* the minimal Forward Open with no path */
@@ -153,119 +153,147 @@ typedef struct {
 #define CIP_FORWARD_OPEN_EX_MIN_SIZE   (46)
 
 
-slice_s handle_forward_open(slice_s input, slice_s output, plc_s *plc)
+int handle_forward_open(tcp_client_p client)
 {
-    slice_s conn_path;
-    size_t offset = 0;
-    uint8_t fo_cmd = slice_get_uint8(input, 0);
+    int rc = CIP_OK;
+    buf_t *request = &(client->request);
+    buf_t *response = &(client->response);
+    buf_t conn_path;
+    uint8_t fo_cmd = 0;
     forward_open_s fo_req = {0};
+    uint16_t request_size = buf_len(request) - buf_get_cursor(request);
 
     info("Checking Forward Open request:");
-    slice_dump(input);
+    buf_dump(request);
+
+    fo_cmd = buf_get_uint8(request);
 
     /* minimum length check */
-    if(slice_len(input) < ((fo_cmd == 0x54) ? CIP_FORWARD_OPEN_MIN_SIZE : CIP_FORWARD_OPEN_EX_MIN_SIZE)) {
+    if(request_size < ((fo_cmd == 0x54) ? CIP_FORWARD_OPEN_MIN_SIZE : CIP_FORWARD_OPEN_EX_MIN_SIZE)) {
         /* FIXME - send back the right error. */
-        info("Forward open request size, %d, too small.   Should be greater than %d.  Skipped processing!", slice_len(input), CIP_FORWARD_OPEN_MIN_SIZE);
-        return make_cip_error(output, (uint8_t)(slice_get_uint8(input, 0) | (uint8_t)CIP_DONE), (uint8_t)CIP_ERR_UNSUPPORTED, false, (uint16_t)0);
+        info("Forward open request size, %u, too small.   Should be greater than %d.  Skipped processing!", request_size, CIP_FORWARD_OPEN_MIN_SIZE);
+        make_cip_error(response,
+                       (uint8_t)(buf_get_uint8(request) | (uint8_t)CIP_DONE),
+                       (uint8_t)CIP_ERR_INSUFFICIENT_DATA,
+                       false,
+                       (uint16_t)0
+                      );
+        return CIP_ERR_INSUFFICIENT_DATA;
     }
+
+    fo_cmd = buf_get_uint8(request);
+
+    /* skip past the Connection Manager path */
+    if(buf_get_uint8(request) != 2) {
+        info("WARN: Unexpected path length!");
+        return CIP_ERR_INVALID_PARAMETER;
+    }
+
+    /* skip the rest of the path */
+    buf_get_uint8(request);
+    buf_get_uint8(request);
+    buf_get_uint8(request);
+    buf_get_uint8(request);
 
     /* get the data. */
-    offset = sizeof(CIP_FORWARD_OPEN); /* step past the path to the CM */
-    fo_req.secs_per_tick = slice_get_uint8(input, offset); offset++;
-    fo_req.timeout_ticks = slice_get_uint8(input, offset); offset++;
-    fo_req.server_conn_id = slice_get_uint32_le(input, offset); offset += 4;
-    fo_req.client_conn_id = slice_get_uint32_le(input, offset); offset += 4;
-    fo_req.conn_serial_number = slice_get_uint16_le(input, offset); offset += 2;
-    fo_req.orig_vendor_id = slice_get_uint16_le(input, offset); offset += 2;
-    fo_req.orig_serial_number = slice_get_uint32_le(input, offset); offset += 4;
-    fo_req.conn_timeout_multiplier = slice_get_uint8(input, offset); offset += 4; /* byte plus 3-bytes of padding. */
-    fo_req.client_to_server_rpi = slice_get_uint32_le(input, offset); offset += 4;
+
+    fo_req.secs_per_tick = buf_get_uint8(request);
+    fo_req.timeout_ticks = buf_get_uint8(request);
+    fo_req.server_conn_id = buf_get_uint32_le(request);
+    fo_req.client_conn_id = buf_get_uint32_le(request);
+    fo_req.conn_serial_number = buf_get_uint16_le(request);
+    fo_req.orig_vendor_id = buf_get_uint16_le(request);
+    fo_req.orig_serial_number = buf_get_uint32_le(request);
+    fo_req.conn_timeout_multiplier = buf_get_uint8(request); /* byte plus 3-bytes of padding. */
+    buf_get_uint8(request);
+    buf_get_uint8(request);
+    buf_get_uint8(request);
+    fo_req.client_to_server_rpi = buf_get_uint32_le(request);
+
     if(fo_cmd == CIP_FORWARD_OPEN[0]) {
         /* old command uses 16-bit value. */
-        fo_req.client_to_server_conn_params = slice_get_uint16_le(input, offset); offset += 2;
+        fo_req.client_to_server_conn_params = buf_get_uint16_le(request);
     } else {
         /* new command has 32-bit field here. */
-        fo_req.client_to_server_conn_params = slice_get_uint32_le(input, offset); offset += 4;
+        fo_req.client_to_server_conn_params = buf_get_uint32_le(request);
     }
-    fo_req.server_to_client_rpi = slice_get_uint32_le(input, offset); offset += 4;
+    fo_req.server_to_client_rpi = buf_get_uint32_le(request);
     if(fo_cmd == CIP_FORWARD_OPEN[0]) {
         /* old command uses 16-bit value. */
-        fo_req.server_to_client_conn_params = slice_get_uint16_le(input, offset); offset += 2;
+        fo_req.server_to_client_conn_params = buf_get_uint16_le(request);
     } else {
         /* new command has 32-bit field here. */
-        fo_req.server_to_client_conn_params = slice_get_uint32_le(input, offset); offset += 4;
+        fo_req.server_to_client_conn_params = buf_get_uint32_le(request);
     }
-    fo_req.transport_class = slice_get_uint8(input, offset); offset++;
+    fo_req.transport_class = buf_get_uint8(request);
 
     /* check the remaining length */
-    if(offset >= slice_len(input)) {
+    if(buf_get_cursor(request) >= buf_len(request)) {
         /* FIXME - send back the right error. */
-        info("Forward open request size, %d, too small.   Should be greater than %d.  Ran out of space processing the packet!", slice_len(input), offset);
-        return make_cip_error(output, (uint8_t)(slice_get_uint8(input, 0) | CIP_DONE), (uint8_t)CIP_ERR_UNSUPPORTED, false, (uint16_t)0);
+        info("Ran out of data processing the packet!");
+        make_cip_error(response, (uint8_t)(buf_get_uint8(request) | CIP_DONE), (uint8_t)CIP_ERR_INSUFFICIENT_DATA, false, (uint16_t)0);
+        return CIP_ERR_INSUFFICIENT_DATA;
     }
 
-    /* build the path to match. */
-    conn_path = slice_from_slice(input, offset, slice_len(input));
-
-    info("path slice:");
-    slice_dump(conn_path);
-
-    if(!match_path(conn_path, ((offset & 0x01) ? false : true), &plc->path[0], plc->path_len)) {
+    if(!match_path(request, false, &(client->plc->path[0]), client->plc->path_len)) {
         /* FIXME - send back the right error. */
         info("Forward open request path did not match the path for this PLC!");
-        return make_cip_error(output, (uint8_t)(slice_get_uint8(input, 0) | CIP_DONE), (uint8_t)CIP_ERR_UNSUPPORTED, false, (uint16_t)0);
+        make_cip_error(response, (uint8_t)(buf_get_uint8(request) | CIP_DONE), (uint8_t)CIP_ERR_PATH_DEST_UNKNOWN, false, (uint16_t)0);
+        return CIP_ERR_PATH_DEST_UNKNOWN;
     }
 
     /* check to see how many refusals we should do. */
-    if(plc->reject_fo_count > 0) {
-        plc->reject_fo_count--;
-        info("Forward open request being bounced for debugging. %d to go.", plc->reject_fo_count);
-        return make_cip_error(output,
-                             (uint8_t)(slice_get_uint8(input, 0) | CIP_DONE),
-                             (uint8_t)CIP_ERR_0x01,
+    if(client->conn_config.reject_fo_count > 0) {
+        client->conn_config.reject_fo_count--;
+        info("Forward open request being bounced for debugging. %d to go.",client->conn_config.reject_fo_count);
+        make_cip_error(response,
+                             (uint8_t)(buf_get_uint8(request) | CIP_DONE),
+                             (uint8_t)CIP_ERR_FLAG,
                              true,
-                             (uint16_t)0x100);
+                             (uint16_t)CIP_ERR_EX_DUPLICATE_CONN);
+        return CIP_ERR_EX_DUPLICATE_CONN;
     }
 
     /* all good if we got here. */
-    plc->client_connection_id = fo_req.client_conn_id;
-    plc->client_connection_serial_number = fo_req.conn_serial_number;
-    plc->client_vendor_id = fo_req.orig_vendor_id;
-    plc->client_serial_number = fo_req.orig_serial_number;
-    plc->client_to_server_rpi = fo_req.client_to_server_rpi;
-    plc->server_to_client_rpi = fo_req.server_to_client_rpi;
-    plc->server_connection_id = (uint32_t)rand();
-    plc->server_connection_seq = (uint16_t)rand();
+    client->conn_config.client_connection_id = fo_req.client_conn_id;
+    client->conn_config.client_connection_serial_number = fo_req.conn_serial_number;
+    client->conn_config.client_vendor_id = fo_req.orig_vendor_id;
+    client->conn_config.client_serial_number = fo_req.orig_serial_number;
+    client->conn_config.client_to_server_rpi = fo_req.client_to_server_rpi;
+    client->conn_config.server_to_client_rpi = fo_req.server_to_client_rpi;
+    client->conn_config.server_connection_id = (uint32_t)rand();
+    client->conn_config.server_connection_seq = (uint16_t)rand();
 
     /* store the allowed packet sizes. */
-    plc->client_to_server_max_packet = fo_req.client_to_server_conn_params &
+    client->conn_config.client_to_server_max_packet = fo_req.client_to_server_conn_params &
                                ((fo_cmd == CIP_FORWARD_OPEN[0]) ? 0x1FF : 0x0FFF);
-    plc->server_to_client_max_packet = fo_req.server_to_client_conn_params &
+    client->conn_config.server_to_client_max_packet = fo_req.server_to_client_conn_params &
                                ((fo_cmd == CIP_FORWARD_OPEN[0]) ? 0x1FF : 0x0FFF);
 
     /* FIXME - check that the packet sizes are valid 508 or 4002 */
 
     /* now process the FO and respond. */
-    offset = 0;
-    slice_set_uint8(output, offset, (uint8_t)(slice_get_uint8(input, 0) | CIP_DONE)); offset++;
-    slice_set_uint8(output, offset, 0); offset++; /* padding/reserved. */
-    slice_set_uint8(output, offset, 0); offset++; /* no error. */
-    slice_set_uint8(output, offset, 0); offset++; /* no extra error fields. */
+    buf_set_uint8(response, (uint8_t)(fo_cmd | CIP_DONE));
+    buf_set_uint8(response, 0); /* padding/reserved. */
+    buf_set_uint8(response, CIP_OK); /* no error. */
+    buf_set_uint8(response, 0); /* no extra error fields. */
 
-    slice_set_uint32_le(output, offset, plc->server_connection_id); offset += 4;
-    slice_set_uint32_le(output, offset, plc->client_connection_id); offset += 4;
-    slice_set_uint16_le(output, offset, plc->client_connection_serial_number); offset += 2;
-    slice_set_uint16_le(output, offset, plc->client_vendor_id); offset += 2;
-    slice_set_uint32_le(output, offset, plc->client_serial_number); offset += 4;
-    slice_set_uint32_le(output, offset, plc->client_to_server_rpi); offset += 4;
-    slice_set_uint32_le(output, offset, plc->server_to_client_rpi); offset += 4;
+    buf_set_uint32_le(response, client->conn_config.server_connection_id);
+    buf_set_uint32_le(response, client->conn_config.client_connection_id);
+    buf_set_uint16_le(response, client->conn_config.client_connection_serial_number);
+    buf_set_uint16_le(response, client->conn_config.client_vendor_id);
+    buf_set_uint32_le(response, client->conn_config.client_serial_number);
+    buf_set_uint32_le(response, client->conn_config.client_to_server_rpi);
+    buf_set_uint32_le(response, client->conn_config.server_to_client_rpi);
 
     /* not sure what these do... */
-    slice_set_uint8(output, offset, 0); offset++;
-    slice_set_uint8(output, offset, 0); offset++;
+    buf_set_uint8(response, 0);
+    buf_set_uint8(response, 0);
 
-    return slice_from_slice(output, 0, offset);
+    /* cap off the response */
+    buf_set_len(response, buf_get_cursor(response));
+
+    return CIP_OK;
 }
 
 
@@ -276,41 +304,50 @@ typedef struct {
     uint16_t client_connection_serial_number; /* our connection ID/serial number */
     uint16_t client_vendor_id;      /* our unique vendor ID */
     uint32_t client_serial_number;  /* our unique serial number */
-    slice_s path;                   /* path to PLC */
+    buf_t path;                   /* path to PLC */
 } forward_close_s;
 
 /* the minimal Forward Open with no path */
 #define CIP_FORWARD_CLOSE_MIN_SIZE   (16)
 
 
-slice_s handle_forward_close(slice_s input, slice_s output, plc_s *plc)
+int handle_forward_close(tcp_client_p client)
 {
-    slice_s conn_path;
-    size_t offset = 0;
+    int rc = CIP_OK;
+    buf_t *request = &(client->request);
+    buf_t *response = &(client->response);
+    // buf_t conn_path;
     forward_close_s fc_req = {0};
+    uint8_t path_length_words = 0;
 
     info("Checking Forward Close request:");
-    slice_dump(input);
+    buf_dump(request);
 
     /* minimum length check */
-    if(slice_len(input) < CIP_FORWARD_CLOSE_MIN_SIZE) {
+    if(buf_len(request) < CIP_FORWARD_CLOSE_MIN_SIZE) {
         /* FIXME - send back the right error. */
-        return make_cip_error(output, (uint8_t)(slice_get_uint8(input, 0) | CIP_DONE), (uint8_t)CIP_ERR_UNSUPPORTED, false, (uint16_t)0);
+        make_cip_error(response, (uint8_t)(buf_get_uint8(request) | CIP_DONE), (uint8_t)CIP_ERR_INSUFFICIENT_DATA, false, (uint16_t)0);
+        return CIP_ERR_INSUFFICIENT_DATA;
     }
 
     /* get the data. */
-    offset = sizeof(CIP_FORWARD_CLOSE); /* step past the path to the CM */
-    fc_req.secs_per_tick = slice_get_uint8(input, offset); offset++;
-    fc_req.timeout_ticks = slice_get_uint8(input, offset); offset++;
-    fc_req.client_connection_serial_number = slice_get_uint16_le(input, offset); offset += 2;
-    fc_req.client_vendor_id = slice_get_uint16_le(input, offset); offset += 2;
-    fc_req.client_serial_number = slice_get_uint32_le(input, offset); offset += 4;
+    fc_req.secs_per_tick = buf_get_uint8(request);
+    fc_req.timeout_ticks = buf_get_uint8(request);
+    fc_req.client_connection_serial_number = buf_get_uint16_le(request);
+    fc_req.client_vendor_id = buf_get_uint16_le(request);
+    fc_req.client_serial_number = buf_get_uint32_le(request);
+
+    path_length_words = *buf_peek_bytes(request);
+
+    /* make a buffer for the path.  The +2 is for the word count and pad bytes. */
+    fc_req.path = buf_make(buf_peek_bytes(request), path_length_words + 2);
 
     /* check the remaining length */
-    if(offset >= slice_len(input)) {
+    if(buf_get_cursor(request) >= buf_len(request)) {
         /* FIXME - send back the right error. */
-        info("Forward close request size, %d, too small.   Should be greater than %d!", slice_len(input), offset);
-        return make_cip_error(output, slice_get_uint8(input, 0) | CIP_DONE, CIP_ERR_UNSUPPORTED, false, 0);
+        info("Forward close request size, %d, too small!", buf_len(request));
+        make_cip_error(response, buf_get_uint8(request) | CIP_DONE, CIP_ERR_INSUFFICIENT_DATA, false, 0);
+        return CIP_ERR_INSUFFICIENT_DATA;
     }
 
     /*
@@ -320,46 +357,51 @@ slice_s handle_forward_close(slice_s input, slice_s output, plc_s *plc)
      */
 
     /* build the path to match. */
-    conn_path = slice_from_slice(input, offset, slice_len(input));
-
-    if(!match_path(conn_path, ((offset & 0x01) ? false : true), plc->path, plc->path_len)) {
+    if((rc = match_path(request, true, client->plc->path, client->plc->path_len)) != CIP_OK) {
         info("path does not match stored path!");
-        return make_cip_error(output, slice_get_uint8(input, 0) | CIP_DONE, CIP_ERR_UNSUPPORTED, false, 0);
+        make_cip_error(response, buf_get_uint8(request) | CIP_DONE, rc, false, 0);
+        return rc;
     }
 
     /* Check the values we got. */
-    if(plc->client_connection_serial_number != fc_req.client_connection_serial_number) {
+    if(client->conn_config.client_connection_serial_number != fc_req.client_connection_serial_number) {
         /* FIXME - send back the right error. */
-        info("Forward close connection serial number, %x, did not match the connection serial number originally passed, %x!", fc_req.client_connection_serial_number, plc->client_connection_serial_number);
-        return make_cip_error(output, slice_get_uint8(input, 0) | CIP_DONE, CIP_ERR_UNSUPPORTED, false, 0);
+        info("Forward close connection serial number, %x, did not match the connection serial number originally passed, %x!", fc_req.client_connection_serial_number, client->conn_config.client_connection_serial_number);
+        make_cip_error(response, buf_get_uint8(request) | CIP_DONE, CIP_ERR_INVALID_PARAMETER, false, 0);
+        return CIP_ERR_INVALID_PARAMETER;
     }
-    if(plc->client_vendor_id != fc_req.client_vendor_id) {
+
+    if(client->conn_config.client_vendor_id != fc_req.client_vendor_id) {
         /* FIXME - send back the right error. */
-        info("Forward close client vendor ID, %x, did not match the client vendor ID originally passed, %x!", fc_req.client_vendor_id, plc->client_vendor_id);
-        return make_cip_error(output, slice_get_uint8(input, 0) | CIP_DONE, CIP_ERR_UNSUPPORTED, false, 0);
+        info("Forward close client vendor ID, %x, did not match the client vendor ID originally passed, %x!", fc_req.client_vendor_id, client->conn_config.client_vendor_id);
+        make_cip_error(response, buf_get_uint8(request) | CIP_DONE, CIP_ERR_INVALID_PARAMETER, false, 0);
+        return CIP_ERR_INVALID_PARAMETER;
     }
-    if(plc->client_serial_number != fc_req.client_serial_number) {
+
+    if(client->conn_config.client_serial_number != fc_req.client_serial_number) {
         /* FIXME - send back the right error. */
-        info("Forward close client serial number, %x, did not match the client serial number originally passed, %x!", fc_req.client_serial_number, plc->client_serial_number);
-        return make_cip_error(output, slice_get_uint8(input, 0) | CIP_DONE, CIP_ERR_UNSUPPORTED, false, 0);
+        info("Forward close client serial number, %x, did not match the client serial number originally passed, %x!", fc_req.client_serial_number, client->conn_config.client_serial_number);
+        return make_cip_error(response, buf_get_uint8(request) | CIP_DONE, CIP_ERR_UNSUPPORTED, false, 0);
     }
 
     /* now process the FClose and respond. */
-    offset = 0;
-    slice_set_uint8(output, offset, slice_get_uint8(input, 0) | CIP_DONE); offset++;
-    slice_set_uint8(output, offset, 0); offset++; /* padding/reserved. */
-    slice_set_uint8(output, offset, 0); offset++; /* no error. */
-    slice_set_uint8(output, offset, 0); offset++; /* no extra error fields. */
+    buf_set_uint8(response, CIP_FORWARD_CLOSE[0] | CIP_DONE);
+    buf_set_uint8(response, 0); /* padding/reserved. */
+    buf_set_uint8(response, CIP_OK); /* no error. */
+    buf_set_uint8(response, 0); /* no extra error fields. */
 
-    slice_set_uint16_le(output, offset, plc->client_connection_serial_number); offset += 2;
-    slice_set_uint16_le(output, offset, plc->client_vendor_id); offset += 2;
-    slice_set_uint32_le(output, offset, plc->client_serial_number); offset += 4;
+    buf_set_uint16_le(response, client->conn_config.client_connection_serial_number);
+    buf_set_uint16_le(response, client->conn_config.client_vendor_id);
+    buf_set_uint32_le(response, client->conn_config.client_serial_number);
 
     /* not sure what these do... */
-    slice_set_uint8(output, offset, 0); offset++;
-    slice_set_uint8(output, offset, 0); offset++;
+    buf_set_uint8(response, 0);
+    buf_set_uint8(response, 0);
 
-    return slice_from_slice(output, 0, offset);
+    /* cap off the response */
+    buf_set_len(response, buf_get_cursor(response));
+
+    return CIP_OK;
 }
 
 
@@ -370,14 +412,19 @@ slice_s handle_forward_close(slice_s input, slice_s output, plc_s *plc)
 #define CIP_READ_MIN_SIZE (6)
 #define CIP_READ_FRAG_MIN_SIZE (10)
 
-slice_s handle_read_request(slice_s input, slice_s output, plc_s *plc)
+int handle_read_request(tcp_client_p client)
 {
-    uint8_t read_cmd = slice_get_uint8(input, 0);  /*get the type. */
+    int rc = CIP_OK;
+    buf_t *request = &(client->request);
+    buf_t *response = &(client->response);
+    uint16_t cip_start_offset = 0;
+    uint16_t cip_req_size = 0;
+    uint8_t read_cmd = 0;
     uint8_t tag_segment_size = 0;
+    uint16_t cip_command_overhead = 0;
     uint16_t element_count = 0;
     uint32_t byte_offset = 0;
-    size_t read_start_offset = 0;
-    size_t offset = 0;
+    // size_t read_start_offset = 0;
     tag_def_s *tag = NULL;
     size_t tag_data_length = 0;
     size_t total_request_size = 0;
@@ -385,218 +432,276 @@ slice_s handle_read_request(slice_s input, slice_s output, plc_s *plc)
     size_t packet_capacity = 0;
     bool need_frag = false;
     size_t amount_to_copy = 0;
+    size_t num_elements_to_copy = 0;
+    buf_t result;
+
+    /* the cursor is queued up at the service byte. */
+    cip_start_offset = buf_get_cursor(request);
+    cip_req_size = buf_len(request) - cip_start_offset;
+
+    /* check the service before we do anything else. */
+    read_cmd = buf_get_uint8(request);
 
     /* Omron does not support fragmented read. */
-    if(plc->plc_type == PLC_OMRON && read_cmd == CIP_READ_FRAG[0]) {
+    if(client->plc->plc_type == PLC_OMRON && read_cmd == CIP_READ_FRAG[0]) {
         info("Omron PLCs do not support fragmented read!");
-        return make_cip_error(output, read_cmd | CIP_DONE, CIP_ERR_UNSUPPORTED, false, 0);
+        make_cip_error(response, read_cmd | CIP_DONE, CIP_ERR_UNSUPPORTED, false, 0);
+        return CIP_ERR_UNSUPPORTED;
     }
 
-    if(slice_len(input) < (read_cmd == CIP_READ[0] ? CIP_READ_MIN_SIZE : CIP_READ_FRAG_MIN_SIZE)) {
+    cip_command_overhead = (read_cmd == CIP_READ[0] ? CIP_READ_MIN_SIZE : CIP_READ_FRAG_MIN_SIZE);
+
+    if(cip_req_size < cip_command_overhead) {
         info("Insufficient data in the CIP read request!");
-        return make_cip_error(output, read_cmd | CIP_DONE, CIP_ERR_UNSUPPORTED, false, 0);
+        make_cip_error(response, read_cmd | CIP_DONE, CIP_ERR_INSUFFICIENT_DATA, false, 0);
+        return CIP_ERR_INSUFFICIENT_DATA;
     }
 
-    offset = 1;
-    tag_segment_size = slice_get_uint8(input, offset); offset++;
+    tag_segment_size = buf_get_uint8(request);
 
-    /* check that we have enough space. */
-    if((slice_len(input) + (read_cmd == CIP_READ[0] ? 2 : 6) - 2) < (tag_segment_size * 2)) {
-        info("Request does not have enough space for element count and byte offset!");
-        return make_cip_error(output, read_cmd | CIP_DONE, CIP_ERR_UNSUPPORTED, false, 0);
+    /* check that we have at least enough space for the tag name and required data. */
+    if((2 * tag_segment_size) + cip_command_overhead > cip_req_size) {
+        info("Request does not have enough space for tag name and required fields!");
+        make_cip_error(response, read_cmd | CIP_DONE, CIP_ERR_INSUFFICIENT_DATA, false, 0);
     }
 
-    if(!process_tag_segment(plc, slice_from_slice(input, offset, (size_t)(tag_segment_size * 2)), &tag, &read_start_offset)) {
-        return make_cip_error(output, read_cmd | CIP_DONE, CIP_ERR_UNSUPPORTED, false, 0);
-    }
-
-    /* step past the tag segment. */
-    offset += (size_t)(tag_segment_size * 2);
-
-    element_count = slice_get_uint16_le(input, offset); offset += 2;
-
-    if(plc->plc_type == PLC_OMRON) {
-        if(element_count != 1) {
-            info("Omron PLC requires element count to be 1, found %d!", element_count);
-            return make_cip_error(output, read_cmd | CIP_DONE, CIP_ERR_UNSUPPORTED, false, 0);
-        } else {
-            /* all good, now fake it with an element count that is the full tag. */
-            element_count = (uint16_t)tag->elem_count;
+    do {
+        /* process the tag name and look up the tag.   This eats the tag name data. */
+        if((rc = process_tag_segment(client, &tag)) != CIP_OK) {
+            make_cip_error(response, read_cmd | CIP_DONE, rc, false, 0);
+            break;
         }
-    }
 
-    if(read_cmd == CIP_READ_FRAG[0]) {
-        byte_offset = slice_get_uint32_le(input, offset); offset += 4;
-    }
+        /* get the element count */
+        element_count = buf_get_uint16_le(request);
 
-    /* double check the size of the request. */
-    if(offset != slice_len(input)) {
-        info("Request size does not match CIP request size!");
-        return make_cip_error(output, read_cmd | CIP_DONE, CIP_ERR_UNSUPPORTED, false, 0);
-    }
+        /* FIXME - this is not required. */
+        if(client->plc->plc_type == PLC_OMRON) {
+            if(element_count != 1) {
+                info("Omron PLC requires element count to be 1, found %d!", element_count);
+                make_cip_error(response, read_cmd | CIP_DONE, CIP_ERR_INVALID_PARAMETER, false, 0);
+                break;
+            } else {
+                /* all good, now fake it with an element count that is the full tag. */
+                element_count = (uint16_t)tag->elem_count;
+            }
+        }
 
-    /* check the offset bounds. */
-    tag_data_length = (size_t)(tag->elem_count * tag->elem_size);
+        if(read_cmd == CIP_READ_FRAG[0]) {
+            byte_offset = buf_get_uint32_le(request) + client->access_offset_bytes;
+        } else {
+            byte_offset = client->access_offset_bytes;
+        }
 
-    info("tag_data_length = %d", tag_data_length);
+        /* check the offset bounds. */
+        tag_data_length = (size_t)(tag->elem_count * tag->elem_size);
 
-    /* get the amount requested. */
-    total_request_size = (size_t)(element_count * tag->elem_size);
+        info("tag_data_length = %d", tag_data_length);
 
-    info("total_request_size = %d", total_request_size);
+        /* get the amount requested. */
+        total_request_size = (size_t)(element_count * tag->elem_size);
 
-    /* check the amount */
-    if(read_start_offset + total_request_size > tag_data_length) {
-        info("request asks for too much data!");
-        return make_cip_error(output, read_cmd | CIP_DONE, CIP_ERR_EXTENDED, true, CIP_ERR_EX_TOO_LONG);
-    }
+        info("total_request_size = %d", total_request_size);
 
-    /* check to make sure that the offset passed is within the bounds. */
-    if(read_start_offset + byte_offset > tag_data_length) {
-        info("request offset is past the end of the tag!");
-        return make_cip_error(output, read_cmd | CIP_DONE, CIP_ERR_EXTENDED, true, CIP_ERR_EX_TOO_LONG);
-    }
+        /* check the amount */
+        if(total_request_size > tag_data_length) {
+            info("request asks for too much data!");
+            make_cip_error(response, read_cmd | CIP_DONE, CIP_ERR_EXTENDED, true, CIP_ERR_EX_TOO_LONG);
+            rc = CIP_ERR_EX_TOO_LONG;
+            break;
+        }
 
-    /* do we need to fragment the result? */
-    remaining_size = total_request_size - byte_offset;
-    packet_capacity = slice_len(output) - 6; /* MAGIC - CIP header plus data type bytes is 6 bytes. */
+        /* check to make sure that the offset passed is within the bounds. */
+        if(byte_offset > tag_data_length) {
+            info("request offset is past the end of the tag!");
+            make_cip_error(response, read_cmd | CIP_DONE, CIP_ERR_EXTENDED, true, CIP_ERR_EX_TOO_LONG);
+            rc = CIP_ERR_EX_TOO_LONG;
+            break;
+        }
 
-    info("packet_capacity = %d", packet_capacity);
+        /* do we need to fragment the result? */
+        remaining_size = total_request_size - byte_offset;
+        packet_capacity = (buf_len(response) - cip_start_offset) - 6; /* MAGIC - CIP header plus data type bytes is 6 bytes. */
 
-    if(remaining_size > packet_capacity) {
-        need_frag = true;
-    } else {
-        need_frag = false;
-    }
+        info("packet_capacity = %d", packet_capacity);
 
-    info("need_frag = %s", need_frag ? "true" : "false");
+        if(remaining_size > packet_capacity) {
+            need_frag = true;
+            amount_to_copy = packet_capacity;
+        } else {
+            need_frag = false;
+            amount_to_copy = remaining_size;
+        }
 
-    /* start making the response. */
-    offset = 0;
-    slice_set_uint8(output, offset, read_cmd | CIP_DONE); offset++;
-    slice_set_uint8(output, offset, 0); offset++; /* padding/reserved. */
-    slice_set_uint8(output, offset, (need_frag ? CIP_ERR_FRAG : CIP_OK)); offset++; /* no error. */
-    slice_set_uint8(output, offset, 0); offset++; /* no extra error fields. */
+        /* only copy whole elements */
+        num_elements_to_copy = amount_to_copy / tag->elem_size;
 
-    /* copy the data type. */
-    slice_set_uint16_le(output, offset, tag->tag_type); offset += 2;
+        info("need_frag = %s", need_frag ? "true" : "false");
 
-    /* how much data to copy? */
-    amount_to_copy = (remaining_size < packet_capacity ? remaining_size : packet_capacity);
-    if(amount_to_copy > 8) {
-        /* align to 8-byte chunks */
-        amount_to_copy &= 0xFFFFC;
-    }
+        /* start making the response. */
+        info("INFO: Writing CIP response header.");
 
-    info("amount_to_copy = %d", amount_to_copy);
-    info("copy start location = %d", offset);
-    info("output space = %d", slice_len(output) - offset);
+        buf_set_uint8(response, read_cmd | CIP_DONE);
+        buf_set_uint8(response, 0); /* padding/reserved. */
+        buf_set_uint8(response, (need_frag ? CIP_ERR_FRAG : CIP_OK));
+        buf_set_uint8(response, 0); /* no extra error fields. */
 
-    /* FIXME - use memcpy */
-    for(size_t i=0; i < amount_to_copy; i++) {
-        slice_set_uint8(output, offset + i, tag->data[byte_offset + i]);
-    }
+        /* copy the data type. */
+        info("INFO: writing tag data type.");
 
-    offset += amount_to_copy;
+        buf_set_uint16_le(response, tag->tag_type);
 
-    return slice_from_slice(output, 0, offset);
+        info("amount_to_copy = %u", (unsigned int)amount_to_copy);
+        info("num_elements_to_copy = %u", (unsigned int)num_elements_to_copy);
+        info("copy start location = %u", (unsigned int)buf_get_cursor(response));
+        info("response space = %u", (unsigned int)(buf_len(response) - buf_get_cursor(response)));
+
+
+        // if(amount_to_copy > 8) { tag->elem_size
+        //     /* align to elem_size chunks */
+        //     amount_to_copy &= 0xFFFFC;
+        // }
+
+
+        if(!mutex_lock(&(tag->mutex))) {
+            for(size_t i=0; i < (num_elements_to_copy * tag->elem_size) && (byte_offset + i) < tag_data_length; i++) {
+                buf_set_uint8(response, tag->data[byte_offset + i]);
+            }
+
+            mutex_unlock(&(tag->mutex));
+        } else {
+            error("ERROR: Unable to lock tag mutex!");
+        }
+
+        /* cap off the response */
+        buf_set_len(response, buf_get_cursor(response));
+        rc = CIP_OK;
+    } while(0);
+
+    return rc;
 }
-
 
 
 
 #define CIP_WRITE_MIN_SIZE (6)
 #define CIP_WRITE_FRAG_MIN_SIZE (10)
 
-slice_s handle_write_request(slice_s input, slice_s output, plc_s *plc)
+int handle_write_request(tcp_client_p client)
 {
-    uint8_t write_cmd = slice_get_uint8(input, 0);  /*get the type. */
+    int rc = CIP_OK;
+    buf_t *request = &(client->request);
+    buf_t *response = &(client->response);
+    uint8_t write_cmd = 0;
     uint8_t tag_segment_size = 0;
     uint32_t byte_offset = 0;
     size_t write_start_offset = 0;
-    size_t offset = 0;
     tag_def_s *tag = NULL;
     size_t tag_data_length = 0;
     size_t total_request_size = 0;
-    bool need_frag = false;
     uint16_t write_data_type = 0;
     uint16_t write_element_count = 0;
+    uint16_t cip_request_start_offset = 0;
+    buf_t result;
 
-    if(slice_len(input) < (write_cmd == CIP_WRITE[0] ? CIP_WRITE_MIN_SIZE : CIP_WRITE_FRAG_MIN_SIZE)) {
+    cip_request_start_offset = buf_get_cursor(request);
+
+    info("Processing write request:");
+    buf_dump_offset(request, cip_request_start_offset);
+
+    write_cmd = buf_get_uint8(request);  /*get the service type. */
+
+    if(buf_len(request) < (write_cmd == CIP_WRITE[0] ? CIP_WRITE_MIN_SIZE : CIP_WRITE_FRAG_MIN_SIZE)) {
         info("Insufficient data in the CIP write request!");
-        return make_cip_error(output, write_cmd | CIP_DONE, CIP_ERR_UNSUPPORTED, false, 0);
+        make_cip_error(response, write_cmd | CIP_DONE, CIP_ERR_INSUFFICIENT_DATA, false, 0);
+        return CIP_ERR_INSUFFICIENT_DATA;
     }
 
-    offset = 1;
-    tag_segment_size = slice_get_uint8(input, offset); offset++;
+    tag_segment_size = *buf_peek_bytes(request);
 
     /* check that we have enough space. */
-    if((slice_len(input) + (write_cmd == CIP_WRITE[0] ? 2 : 6) - 2) < (tag_segment_size * 2)) {
+    if((buf_len(request) + (write_cmd == CIP_WRITE[0] ? 2 : 6) - 2) < (tag_segment_size * 2)) {
         info("Request does not have enough space for element count and byte offset!");
-        return make_cip_error(output, write_cmd | CIP_DONE, CIP_ERR_UNSUPPORTED, false, 0);
+        make_cip_error(response, write_cmd | CIP_DONE, CIP_ERR_INSUFFICIENT_DATA, false, 0);
+        return CIP_ERR_INSUFFICIENT_DATA;
     }
 
-    if(!process_tag_segment(plc, slice_from_slice(input, offset, (size_t)(tag_segment_size * 2)), &tag, &write_start_offset)) {
-        return make_cip_error(output, write_cmd | CIP_DONE, CIP_ERR_UNSUPPORTED, false, 0);
-    }
+    do {
+        /* process the tag name and look up the tag.   This eats the tag name data. */
+        if((rc = process_tag_segment(client, &tag)) != CIP_OK) {
+            make_cip_error(response, write_cmd | CIP_DONE, rc, false, 0);
+            break;
+        }
 
-    /* step past the tag segment. */
-    offset += (size_t)(tag_segment_size * 2);
+        /* get the tag data type and compare. */
+        write_data_type = buf_get_uint16_le(request);
 
-    /* get the tag data type and compare. */
-    write_data_type = slice_get_uint16_le(input, offset); offset += 2;
+        /* check that the data types match. */
+        if(tag->tag_type != write_data_type) {
+            info("tag data type %02x does not match the data type in the write request %02x", tag->tag_type, write_data_type);
+            make_cip_error(response, write_cmd | CIP_DONE, CIP_ERR_INVALID_PARAMETER, false, 0);
+            rc = CIP_ERR_INVALID_PARAMETER;
+            break;
+        }
 
-    /* check that the data types match. */
-    if(tag->tag_type != write_data_type) {
-        info("tag data type %02x does not match the data type in the write request %02x", tag->tag_type, write_data_type);
-        return make_cip_error(output, write_cmd | CIP_DONE, CIP_ERR_UNSUPPORTED, false, 0);
-    }
+        /* get the number of elements to write. */
+        write_element_count = buf_get_uint16_le(request);
 
-    /* get the number of elements to write. */
-    write_element_count = slice_get_uint16_le(input, offset); offset += 2;
+        /* check the number of elements */
+        if(write_element_count > tag->elem_count) {
+            info("request tries to write too many elements!");
+            make_cip_error(response, write_cmd | CIP_DONE, CIP_ERR_EXTENDED, true, CIP_ERR_EX_TOO_LONG);
+            rc = CIP_ERR_EX_TOO_LONG;
+            break;
+        }
 
-    /* check the number of elements */
-    if(write_element_count > tag->elem_count) {
-        info("request tries to write too many elements!");
-        return make_cip_error(output, write_cmd | CIP_DONE, CIP_ERR_EXTENDED, true, CIP_ERR_EX_TOO_LONG);
-    }
+        if(write_cmd == CIP_WRITE_FRAG[0]) {
+            byte_offset = buf_get_uint32_le(request) + client->access_offset_bytes;
+        } else {
+            byte_offset = client->access_offset_bytes;
+        }
 
-    if(write_cmd == CIP_WRITE_FRAG[0]) {
-        byte_offset = slice_get_uint32_le(input, offset); offset += 4;
-    }
+        info("byte_offset = %u", byte_offset);
 
-    info("byte_offset = %d", byte_offset);
+        /* check the offset bounds. */
+        tag_data_length = (size_t)(tag->elem_count * tag->elem_size);
 
-    /* check the offset bounds. */
-    tag_data_length = (size_t)(tag->elem_count * tag->elem_size);
+        info("tag_data_length = %d", tag_data_length);
 
-    info("tag_data_length = %d", tag_data_length);
+        /* get the write amount requested. */
+        total_request_size = buf_len(request) - buf_get_cursor(request);
 
-    /* get the write amount requested. */
-    total_request_size = slice_len(input) - offset;
+        info("total_request_size = %d", total_request_size);
 
-    info("total_request_size = %d", total_request_size);
+        /* check the amount */
+        if(total_request_size > tag_data_length - byte_offset) {
+            info("request tries to write too much data!");
+            make_cip_error(response, write_cmd | CIP_DONE, CIP_ERR_EXTENDED, true, CIP_ERR_EX_TOO_LONG);
+            rc = CIP_ERR_EX_TOO_LONG;
+            break;
+        }
 
-    /* check the amount */
-    if(byte_offset + total_request_size > tag_data_length) {
-        info("request tries to write too much data!");
-        return make_cip_error(output, write_cmd | CIP_DONE, CIP_ERR_EXTENDED, true, CIP_ERR_EX_TOO_LONG);
-    }
+        /* copy the data. */
+        if(!mutex_lock(&(tag->mutex))) {
+            memcpy(&tag->data[byte_offset], buf_peek_bytes(request), total_request_size);
 
-    /* copy the data. */
-    info("byte_offset = %d", byte_offset);
-    info("offset = %d", offset);
-    info("total_request_size = %d", total_request_size);
-    memcpy(&tag->data[byte_offset], slice_get_bytes(input, offset), total_request_size);
+            mutex_unlock(&(tag->mutex));
+        } else {
+            error("ERROR: Unable to lock tag mutex!");
+        }
 
-    /* start making the response. */
-    offset = 0;
-    slice_set_uint8(output, offset, write_cmd | CIP_DONE); offset++;
-    slice_set_uint8(output, offset, 0); offset++; /* padding/reserved. */
-    slice_set_uint8(output, offset, (need_frag ? CIP_ERR_FRAG : CIP_OK)); offset++; /* no error. */
-    slice_set_uint8(output, offset, 0); offset++; /* no extra error fields. */
+        /* start making the response. */
+        buf_set_uint8(response, write_cmd | CIP_DONE);
+        buf_set_uint8(response, 0); /* padding/reserved. */
+        buf_set_uint8(response, CIP_OK);
+        buf_set_uint8(response, 0); /* no extra error fields. */
 
-    return slice_from_slice(output, 0, offset);
+        /* cap off the response */
+        buf_set_len(response, buf_get_cursor(response));
+
+        rc = CIP_OK;
+    } while(0);
+
+    return rc;
 }
 
 
@@ -610,37 +715,42 @@ slice_s handle_write_request(slice_s input, slice_s output, plc_s *plc)
  * find the tag name, then check the numeric segments, if any, against the
  * tag dimensions.
  */
-
-bool process_tag_segment(plc_s *plc, slice_s input, tag_def_s **tag, size_t *start_read_offset)
+int process_tag_segment(tcp_client_p client, tag_def_s **tag)
 {
-    size_t offset = 0;
-    uint8_t symbolic_marker = slice_get_uint8(input, offset); offset++;
+    int rc = CIP_OK;
+    buf_t *request = &(client->request);
+    uint8_t segment_type = 0;
     uint8_t name_len = 0;
-    slice_s tag_name;
     size_t dimensions[3] = { 0, 0, 0};
     size_t dimension_index = 0;
+    uint16_t request_size = 0;
+    uint8_t tag_path_words = 0;
+    char *tag_name = NULL;
 
-    if(symbolic_marker != CIP_SYMBOLIC_SEGMENT_MARKER)  {
-        info("Expected symbolic segment but found %x!", symbolic_marker);
-        return false;
+    tag_path_words = buf_get_uint8(request);
+    segment_type = buf_get_uint8(request);
+
+    if(segment_type != CIP_SYMBOLIC_SEGMENT_MARKER)  {
+        info("Expected symbolic segment but found %x!", segment_type);
+        return CIP_ERR_INVALID_PARAMETER;
     }
+
+    request_size = buf_len(request) - buf_get_cursor(request);
 
     /* get and check the length of the symbolic name part. */
-    name_len = slice_get_uint8(input, offset); offset++;
-    if(name_len >= slice_len(input)) {
-        info("Insufficient space in symbolic segment for name.   Needed %d bytes but only had %d bytes!", name_len, slice_len(input)-1);
-        return false;
+    name_len = buf_get_uint8(request);
+    if(name_len >= request_size) {
+        info("Insufficient space in symbolic segment for name.   Needed %d bytes but only had %d bytes!", name_len, request_size);
+        return CIP_ERR_INSUFFICIENT_DATA;
     }
 
-    /* bump the offset.   Must be 16-bit aligned, so pad if needed. */
-    offset += (size_t)(name_len + ((name_len & 0x01) ? 1 : 0));
+    tag_name = (char *)buf_peek_bytes(request);
 
-    /* try to find the tag. */
-    tag_name = slice_from_slice(input, 2, name_len);
-    *tag = plc->tags;
+    /* try to match the tag name. */
+    *tag = client->plc->tags;
 
     while(*tag) {
-        if(slice_match_string(tag_name, (*tag)->name)) {
+        if(buf_match_bytes(request, (uint8_t*)((*tag)->name), name_len)) {
             info("Found tag %s", (*tag)->name);
             break;
         }
@@ -649,39 +759,66 @@ bool process_tag_segment(plc_s *plc, slice_s input, tag_def_s **tag, size_t *sta
     }
 
     if(*tag) {
-        slice_s numeric_segments = slice_from_slice(input, offset, slice_len(input));
+        buf_t numeric_segments;
+        uint16_t remaining_tag_path = 2*tag_path_words;
+        uint16_t tag_name_segment_len = name_len + (name_len % 1 ? 0 : 1);
+
+        info("Found tag %.*s", name_len, tag_name);
+
+        info("Total tag path size %u.", remaining_tag_path);
+        info("Tag name segment length %u.", tag_name_segment_len);
+
+        /* FIXME - guard against rollover */
+        remaining_tag_path -= tag_name_segment_len;
+
+        info("Remaining tag path length %u.", remaining_tag_path);
+
+        /* skip past the name, don't forget the padding */
+        buf_set_cursor(request, buf_get_cursor(request) + tag_name_segment_len);
+
+        info("Cursor is now %u.", buf_get_cursor(request));
+
+        numeric_segments = *request;
+
+        /* cap off the length of the numeric segment portion */
+        buf_set_len(&numeric_segments, buf_get_cursor(&numeric_segments) + remaining_tag_path);
 
         dimension_index = 0;
 
         info("Numeric segment(s):");
-        slice_dump(numeric_segments);
+        buf_dump(&numeric_segments);
 
-        while(slice_len(numeric_segments) > 0) {
-            uint8_t segment_type = slice_get_uint8(numeric_segments, 0);
+        while(buf_get_cursor(&numeric_segments) < buf_len(&numeric_segments)) {
+            uint8_t segment_type = 0;
 
             if(dimension_index >= 3) {
                 info("More numeric segments than expected!   Remaining request:");
-                slice_dump(numeric_segments);
-                return false;
+                buf_dump(&numeric_segments);
+                return CIP_ERR_INVALID_PARAMETER;
             }
+
+            segment_type = buf_get_uint8(&numeric_segments);
 
             switch(segment_type) {
                 case 0x28: /* single byte value. */
-                    dimensions[dimension_index] = (size_t)slice_get_uint8(numeric_segments, 1);
+                    dimensions[dimension_index] = (size_t)buf_get_uint8(&numeric_segments);
                     dimension_index++;
-                    numeric_segments = slice_from_slice(numeric_segments, 2, slice_len(numeric_segments));
                     break;
 
                 case 0x29: /* two byte value */
-                    dimensions[dimension_index] = (size_t)slice_get_uint16_le(numeric_segments, 2);
+                    /* eat the pad byte */
+                    buf_get_uint8(&numeric_segments);
+
+                    dimensions[dimension_index] = (size_t)buf_get_uint16_le(&numeric_segments);
                     dimension_index++;
-                    numeric_segments = slice_from_slice(numeric_segments, 4, slice_len(numeric_segments));
                     break;
 
                 case 0x2A: /* four byte value */
-                    dimensions[dimension_index] = (size_t)slice_get_uint32_le(numeric_segments, 2);
+                    /* eat the pad byte */
+                    buf_get_uint8(&numeric_segments);
+
+                    dimensions[dimension_index] = (size_t)buf_get_uint32_le(&numeric_segments);
                     dimension_index++;
-                    numeric_segments = slice_from_slice(numeric_segments, 6, slice_len(numeric_segments));
                     break;
 
                 default:
@@ -713,12 +850,12 @@ bool process_tag_segment(plc_s *plc, slice_s input, tag_def_s **tag, size_t *sta
                                       dimensions[1] *  (*tag)->dimensions[2] +
                                       dimensions[2]);
 
-            *start_read_offset = (size_t)((*tag)->elem_size * element_offset);
+            client->access_offset_bytes = (size_t)((*tag)->elem_size * element_offset);
         } else {
-            *start_read_offset = 0;
+            client->access_offset_bytes = 0;
         }
     } else {
-        info("Tag %.*s not found!", slice_len(tag_name), (const char *)(tag_name.data));
+        info("Tag %.*s not found!", name_len, (const char *)(tag_name));
         return false;
     }
 
@@ -727,65 +864,55 @@ bool process_tag_segment(plc_s *plc, slice_s input, tag_def_s **tag, size_t *sta
     return true;
 }
 
+
+
 /* match a path.   This is tricky, thanks, Rockwell. */
-bool match_path(slice_s input, bool need_pad, uint8_t *path, uint8_t path_len)
+int match_path(buf_t *request, bool need_pad, uint8_t *path, uint8_t path_len)
 {
-    size_t input_len = slice_len(input);
-    size_t input_path_len = 0;
-    size_t path_start = 0;
+    uint8_t input_path_len = 0;
 
-    info("Starting with request path:");
-    slice_dump(input);
-    info("and stored path:");
-    slice_dump(slice_make(path, (ssize_t)path_len));
-
-    if(input_len < path_len) {
-        info("path does not match lengths.   Input length %zu, path length %zu.", input_len, path_len);
-        return false;
-    }
-
-    /* the first byte of the path input is the length byte in 16-bit words */
-    input_path_len = (size_t)slice_get_uint8(input, 0);
+    /* the first byte of the path request is the length byte in 16-bit words */
+    input_path_len = buf_get_uint8(request);
 
     /* check it against the passed path length */
     if((input_path_len * 2) != path_len) {
         info("path is wrong length.   Got %zu but expected %zu!", input_path_len*2, path_len);
-        return false;
+        return CIP_ERR_INSUFFICIENT_DATA;
     }
 
     /* where does the path start? */
     if(need_pad) {
-        path_start = 2;
-    } else {
-        path_start = 1;
+        uint8_t dummy = buf_get_uint8(request);
     }
 
-    info("Comparing slice:");
-    slice_dump(slice_from_slice(input, path_start, slice_len(input)));
-    info("with slice:");
-    slice_dump(slice_make(path, (ssize_t)path_len));
-
-    return slice_match_bytes(slice_from_slice(input, path_start, slice_len(input)), path, path_len);
+    if(!buf_match_bytes(request, path, (uint16_t)path_len)) {
+        info("Paths do not match!");
+        return CIP_ERR_INVALID_PARAMETER;
+    } else {
+        buf_set_cursor(request, buf_get_cursor(request) + path_len);
+        return CIP_OK;
+    }
 }
 
 
 
-slice_s make_cip_error(slice_s output, uint8_t cip_cmd, uint8_t cip_err, bool extend, uint16_t extended_error)
+bool make_cip_error(buf_t *response, uint8_t cip_cmd, uint8_t cip_err, bool extend, uint16_t extended_error)
 {
-    size_t result_size = 0;
+    /* cursor is set higher up in the call chain */
 
-    slice_set_uint8(output, 0, cip_cmd | CIP_DONE);
-    slice_set_uint8(output, 1, 0); /* reserved, must be zero. */
-    slice_set_uint8(output, 2, cip_err);
+    buf_set_uint8(response, cip_cmd | CIP_DONE);
+    buf_set_uint8(response, 0); /* reserved, must be zero. */
+    buf_set_uint8(response, cip_err);
 
     if(extend) {
-        slice_set_uint8(output, 3, 2); /* two bytes of extended status. */
-        slice_set_uint16_le(output, 4, extended_error);
-        result_size = 6;
+        buf_set_uint8(response, 2); /* two bytes of extended status. */
+        buf_set_uint16_le(response, extended_error);
     } else {
-        slice_set_uint8(output, 3, 0); /* no additional bytes of sub-error. */
-        result_size = 4;
+        buf_set_uint8(response, 0); /* no additional bytes of sub-error. */
     }
 
-    return slice_from_slice(output, 0, result_size);
+    /* cap off the response. */
+    buf_set_len(response, buf_get_cursor(response));
+
+    return true;
 }

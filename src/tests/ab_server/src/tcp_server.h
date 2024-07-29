@@ -35,19 +35,39 @@
 
 #include <signal.h>
 #include <stdbool.h>
-#include "slice.h"
+#include "buf.h"
+#include "plc.h"
 
 typedef enum {
-    TCP_SERVER_INCOMPLETE = 100001,
-    TCP_SERVER_PROCESSED = 100002,
-    TCP_SERVER_DONE = 100003,
-    TCP_SERVER_BAD_REQUEST = 100004,
-    TCP_SERVER_UNSUPPORTED = 100005
-} tcp_server_status_t;
+    TCP_CLIENT_INCOMPLETE = 100001,
+    TCP_CLIENT_PROCESSED = 100002,
+    TCP_CLIENT_DONE = 100003,
+    TCP_CLIENT_BAD_REQUEST = 100004,
+    TCP_CLIENT_UNSUPPORTED = 100005
+} tcp_client_status_t;
 
-typedef struct tcp_server *tcp_server_p;
+struct tcp_client {
+    int sock_fd;
+    buf_t buffer;
+    buf_t request;
+    buf_t response;
+    int (*handler)(struct tcp_client *client);
+    volatile sig_atomic_t *terminate;
+    plc_s *plc;
+    void *context;
 
-extern tcp_server_p tcp_server_create(const char *host, const char *port, slice_s buffer, slice_s (*handler)(slice_s input, slice_s output, void *context), void *context);
-extern void tcp_server_start(tcp_server_p server, volatile sig_atomic_t *terminate);
-extern void tcp_server_destroy(tcp_server_p server);
+    /* info for this specific connection */
+    struct plc_connection_config conn_config;
 
+    /* if the tag path includes array dimension data then we are not starting at the first element in the tag data. */
+    size_t access_offset_bytes;
+
+    uint8_t buffer_data[0];
+};
+
+typedef struct tcp_client *tcp_client_p;
+
+extern void tcp_server_run(const char *host, const char *port, int (*handler)(tcp_client_p client), size_t buffer_size, plc_s *plc, volatile sig_atomic_t *terminate, void *context);
+
+// extern void tcp_server_start(tcp_server_p server, volatile sig_atomic_t *terminate);
+// extern void tcp_server_destroy(tcp_server_p server);

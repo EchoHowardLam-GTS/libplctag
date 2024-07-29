@@ -33,8 +33,9 @@
 
 #pragma once
 
+#include "tcp_server.h"
 #include "plc.h"
-#include "slice.h"
+#include "buf.h"
 
-extern slice_s handle_cpf_unconnected(slice_s input, slice_s output, plc_s *plc);
-extern slice_s handle_cpf_connected(slice_s input, slice_s output, plc_s *plc);
+extern int handle_cpf_unconnected(tcp_client_p client);
+extern int handle_cpf_connected(tcp_client_p client);

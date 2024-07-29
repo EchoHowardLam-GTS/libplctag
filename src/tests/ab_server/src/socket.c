@@ -49,7 +49,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "slice.h"
+#include "buf.h"
 #include "socket.h"
 #include "utils.h"
 
@@ -225,7 +225,7 @@ void socket_close(int sock)
 int socket_accept(int sock)
 {
     fd_set accept_fd_set;
-    TIMEVAL timeout; 
+    TIMEVAL timeout;
     int num_accept_ready = 0;
 
     /* set the timeout to zero */
@@ -248,19 +248,30 @@ int socket_accept(int sock)
     } else if (num_accept_ready < 0) {
         info("Error selecting the listen socket!");
         return SOCKET_ERR_SELECT;
-    } 
+    }
 
     return SOCKET_STATUS_OK;
 }
 
 
-slice_s socket_read(int sock, slice_s in_buf)
+
+/* we can read from the cursor to the data length */
+int socket_read(int sock, buf_t *in_buf)
 {
+    uint16_t remaining_buf_space = buf_cap(in_buf) - buf_len(in_buf);
+    uint8_t *data_start = NULL;
+    uint16_t old_cursor = buf_get_cursor(in_buf);
+
+    /* seek to the current end of the data */
+    buf_set_cursor(in_buf, buf_len(in_buf));
+    data_start = buf_peek_bytes(in_buf);
+    buf_set_cursor(in_buf, old_cursor);
+
 #ifdef IS_WINDOWS
-    int rc = (int)recv(sock, (char *)in_buf.data, (int)in_buf.len, 0);
+    int rc = (int)recv(sock, (char *)data_start, (int)remaining_buf_space, 0);
 #else
-    int rc = (int)recv(sock, (char *)in_buf.data, (size_t)in_buf.len, 0);
-#endif 
+    int rc = (int)recv(sock, (char *)data_start, (size_t)remaining_buf_space, 0);
+#endif
 
     if(rc < 0) {
 #ifdef IS_WINDOWS
@@ -275,27 +286,43 @@ slice_s socket_read(int sock, slice_s in_buf)
             info("Socket read error rc=%d.\n", rc);
             rc = SOCKET_ERR_READ;
         }
+
+        info("WARN: Socket read returned zero or error.");
+    } else {
+        /* grow the buf size to include the data we just read. */
+        buf_set_len(in_buf, buf_len(in_buf) + (uint16_t)rc);
+
+        info("socket_read(): Got data from socket:");
+        buf_dump(in_buf);
     }
 
-    return ((rc>=0) ? slice_from_slice(in_buf, 0, (size_t)(unsigned int)rc) : slice_make_err(rc));
+    return rc;
 }
 
 
 /* this blocks until all the data is written or there is an error. */
-int socket_write(int sock, slice_s out_buf)
+int socket_write(int sock, buf_t *out_buf)
 {
-    size_t total_bytes_written = 0;
     int rc = 0;
-    slice_s tmp_out_buf = out_buf;
+    uint16_t bytes_written = 0;
+    uint16_t data_len = buf_get_cursor(out_buf);
+    uint8_t *data_start = NULL;
+    uint16_t bytes_to_write = data_len;
+
+    /* write until we exhaust the data. The buf length marks the end of the data. */
 
     info("socket_write(): writing packet:");
-    slice_dump(out_buf);
+    buf_dump(out_buf);
+
+    /* reset the cursor and get the data start */
+    buf_set_cursor(out_buf, 0);
+    data_start = buf_peek_bytes(out_buf);
 
     do {
 #ifdef IS_WINDOWS
-        rc = (int)send(sock, (char *)tmp_out_buf.data, (int)tmp_out_buf.len, 0);
+        rc = (int)send(sock, (char *)data_start, (int)bytes_to_write, 0);
 #else
-        rc = (int)send(sock, (char *)tmp_out_buf.data, (size_t)tmp_out_buf.len, 0);
+        rc = (int)send(sock, (char *)data_start, (size_t)bytes_to_write, 0);
 #endif
 
         /* was there an error? */
@@ -313,13 +340,18 @@ int socket_write(int sock, slice_s out_buf)
 #endif
                 info("Socket write error rc=%d.\n", rc);
                 return SOCKET_ERR_WRITE;
+            } else {
+                /* no error, just try again */
+                rc = 0;
             }
         } else {
-            total_bytes_written += (size_t)rc;
-            tmp_out_buf = slice_from_slice(out_buf, total_bytes_written, slice_len(out_buf) - total_bytes_written);
+            bytes_written += (size_t)rc;
+            data_start += rc;
+            bytes_to_write = data_len - bytes_written;
         }
-    } while(total_bytes_written < slice_len(out_buf));
+    } while(bytes_written < data_len);
 
-    return (int)(unsigned int)total_bytes_written;
+    buf_set_cursor(out_buf, data_len);
+
+    return (int)(unsigned int)bytes_written;
 }
-

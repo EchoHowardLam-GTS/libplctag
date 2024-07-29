@@ -38,7 +38,7 @@
 #include "eip.h"
 #include "pccc.h"
 #include "plc.h"
-#include "slice.h"
+#include "buf.h"
 #include "utils.h"
 
 const uint8_t PCCC_PREFIX[] = { 0x0f, 0x00 };
@@ -49,75 +49,92 @@ const uint8_t SLC_WRITE[] = { 0xaa };
 
 const uint8_t PCCC_RESP_PREFIX[] = { 0xcb, 0x00, 0x00, 0x00, 0x07, 0x3d, 0xf3, 0x45, 0x43, 0x50, 0x21 };
 
-const uint8_t PCCC_ERR_ADDR_NOT_USABLE = (int8_t)0x06;
-const uint8_t PCCC_ERR_FILE_IS_WRONG_SIZE = (int8_t)0x07;
-const uint8_t PCCC_ERR_UNSUPPORTED_COMMAND = (uint8_t)0x0e;
 
 // 4f f0 3c 96 06 - address does not point to something usable.
 // 4f f0 fa da 07 - file is wrong size.
 // 4f f0 a6 b3 0e - command could not be decoded
 
-static slice_s handle_plc5_read_request(slice_s input, slice_s output, plc_s *plc);
-static slice_s handle_plc5_write_request(slice_s input, slice_s output, plc_s *plc);
-static slice_s handle_slc_read_request(slice_s input, slice_s output, plc_s *plc);
-static slice_s handle_slc_write_request(slice_s input, slice_s output, plc_s *plc);
-static slice_s make_pccc_error(slice_s output, uint8_t err_code, plc_s *plc);
+static int handle_plc5_read_request(tcp_client_p client);
+static int handle_plc5_write_request(tcp_client_p client);
+static int handle_slc_read_request(tcp_client_p client);
+static int handle_slc_write_request(tcp_client_p client);
+static int make_pccc_error(tcp_client_p client, uint8_t err_code);
 
 
-slice_s dispatch_pccc_request(slice_s input, slice_s output, plc_s *plc)
+int dispatch_pccc_request(tcp_client_p client)
 {
-    slice_s pccc_input;
-    slice_s pccc_output;
+    int rc = PCCC_OK;
+    buf_t *request = &(client->request);
+    buf_t *response = &(client->response);
+    uint16_t pccc_request_size = 0;
+    uint16_t response_prefix_offset = 0;
+
     info("Got packet:");
-    slice_dump(input);
+    buf_dump_offset(request, buf_get_cursor(request));
 
-    if(slice_len(input) < 20) { /* FIXME - 13 + 7 */
+    pccc_request_size = buf_len(request) - buf_get_cursor(request);
+
+    if(pccc_request_size < 20) { /* FIXME - 13 + 7 */
         info("Packet too short!");
-        return make_pccc_error(output, PCCC_ERR_FILE_IS_WRONG_SIZE, plc);
+        make_pccc_error(client, PCCC_ERR_FILE_IS_WRONG_SIZE);
+        return PCCC_ERR_FILE_IS_WRONG_SIZE;
     }
 
-    /* split off the PCCC packet. */
-    pccc_input = slice_from_slice(input, 13, slice_len(input)-13);
-    pccc_output = slice_from_slice(output, sizeof(PCCC_RESP_PREFIX), slice_len(output)-sizeof(PCCC_RESP_PREFIX));
+    // /* copy the response prefix. */
+    // for(size_t i=0; i < sizeof(PCCC_RESP_PREFIX); i++) {
+    //     buf_set_uint8(response, PCCC_RESP_PREFIX[i]);
+    // }
 
-    /* copy the response prefix. */
-    for(size_t i=0; i < sizeof(PCCC_RESP_PREFIX); i++) {
-        slice_set_uint8(output, i, PCCC_RESP_PREFIX[i]);
-    }
+    response_prefix_offset = buf_get_cursor(response);
 
-    info("PCCC packet:");
-    slice_dump(pccc_input);
+    buf_set_cursor(response, buf_get_cursor(response) + sizeof(PCCC_RESP_PREFIX));
 
-    if(slice_match_bytes(pccc_input, PCCC_PREFIX, sizeof(PCCC_PREFIX))) {
-        slice_s pccc_command;
+    if(buf_match_bytes(request, PCCC_PREFIX, sizeof(PCCC_PREFIX))) {
+        buf_t pccc_command;
 
         info("Matched valid PCCC prefix.");
 
-        plc->pccc_seq_id = slice_get_uint16_le(pccc_input, 2);
+        /* two pad or ignored bytes */
+        buf_get_uint8(request);
+        buf_get_uint8(request);
 
-        pccc_command = slice_from_slice(pccc_input, 4, slice_len(pccc_input) - 4);
+        client->conn_config.pccc_seq_id = buf_get_uint16_le(request);
 
         /* match the command. */
-        if(plc->plc_type == PLC_PLC5 && slice_match_bytes(pccc_command, PLC5_READ, sizeof(PLC5_READ))) {
-            pccc_output = handle_plc5_read_request(pccc_command, pccc_output, plc);
-        } else if(plc->plc_type == PLC_PLC5 && slice_match_bytes(pccc_command, PLC5_WRITE, sizeof(PLC5_WRITE))) {
-            pccc_output = handle_plc5_write_request(pccc_command, pccc_output, plc);
-        } else if((plc->plc_type == PLC_SLC || plc->plc_type == PLC_MICROLOGIX) && slice_match_bytes(pccc_command, SLC_READ, sizeof(SLC_READ))) {
-            pccc_output = handle_slc_read_request(pccc_command, pccc_output, plc);
-        } else if((plc->plc_type == PLC_SLC || plc->plc_type == PLC_MICROLOGIX) && slice_match_bytes(pccc_command, SLC_WRITE, sizeof(SLC_WRITE))) {
-            pccc_output = handle_slc_write_request(pccc_command, pccc_output, plc);
+        if(client->plc->plc_type == PLC_PLC5 && buf_match_bytes(request, PLC5_READ, sizeof(PLC5_READ))) {
+            rc = handle_plc5_read_request(client);
+        } else if(client->plc->plc_type == PLC_PLC5 && buf_match_bytes(request, PLC5_WRITE, sizeof(PLC5_WRITE))) {
+            rc = handle_plc5_write_request(client);
+        } else if((client->plc->plc_type == PLC_SLC || client->plc->plc_type == PLC_MICROLOGIX) && buf_match_bytes(request, SLC_READ, sizeof(SLC_READ))) {
+            rc = handle_slc_read_request(client);
+        } else if((client->plc->plc_type == PLC_SLC || client->plc->plc_type == PLC_MICROLOGIX) && buf_match_bytes(request, SLC_WRITE, sizeof(SLC_WRITE))) {
+            rc = handle_slc_write_request(client);
         } else {
             info("Unsupported PCCC command!");
-            pccc_output = make_pccc_error(pccc_output, PCCC_ERR_UNSUPPORTED_COMMAND, plc);
+            make_pccc_error(client, PCCC_ERR_UNSUPPORTED_COMMAND);
+            rc = PCCC_ERR_UNSUPPORTED_COMMAND;
         }
     }
 
-    return slice_from_slice(output, 0, 11 + slice_len(pccc_output));
+    /* back fill the PCCC response prefix */
+    buf_set_cursor(response, response_prefix_offset);
+
+    for(size_t i=0; i < sizeof(PCCC_RESP_PREFIX); i++) {
+        buf_set_uint8(response, PCCC_RESP_PREFIX[i]);
+    }
+
+    info("PCCC response:");
+    buf_dump_offset(response, response_prefix_offset);
+
+    return rc;
 }
 
 
-slice_s handle_plc5_read_request(slice_s input, slice_s output, plc_s *plc)
+int handle_plc5_read_request(tcp_client_p client)
 {
+    int rc = PCCC_OK;
+    buf_t *request = &(client->request);
+    buf_t *response = &(client->response);
     uint16_t offset = 0;
     size_t start_byte_offset = 0;
     uint16_t transfer_size = 0;
@@ -126,28 +143,32 @@ slice_s handle_plc5_read_request(slice_s input, slice_s output, plc_s *plc)
     size_t data_file_num = 0;
     size_t data_file_element = 0;
     uint8_t data_file_prefix = 0;
-    tag_def_s *tag = plc->tags;
+    tag_def_s *tag = client->plc->tags;
 
     info("Got packet:");
-    slice_dump(input);
+    buf_dump(request);
 
-    offset = slice_get_uint16_le(input, 1);
-    transfer_size = slice_get_uint16_le(input, 3);
+    /* eat the command */
+    buf_get_uint8(request);
+
+    offset = buf_get_uint16_le(request);
+    transfer_size = buf_get_uint16_le(request);
 
     /* decode the data file. */
-    data_file_prefix = slice_get_uint8(input, 5);
+    data_file_prefix = buf_get_uint8(request);
 
     /* check the data file prefix. */
     if(data_file_prefix != 0x06) {
         info("Unexpected data file prefix byte %d!", data_file_prefix);
-        return make_pccc_error(output, PCCC_ERR_ADDR_NOT_USABLE, plc);
+        make_pccc_error(client, PCCC_ERR_ADDR_NOT_USABLE);
+        return PCCC_ERR_ADDR_NOT_USABLE;
     }
 
     /* get data file number. */
-    data_file_num = slice_get_uint8(input, 6);
+    data_file_num = buf_get_uint8(request);
 
     /* get the data element number. */
-    data_file_element = slice_get_uint8(input, 7);
+    data_file_element = buf_get_uint8(request);
 
     /* find the tag. */
     while(tag && tag->data_file_num != data_file_num) {
@@ -156,7 +177,8 @@ slice_s handle_plc5_read_request(slice_s input, slice_s output, plc_s *plc)
 
     if(!tag) {
         info("Unable to find tag with data file %u!", data_file_num);
-        return make_pccc_error(output, PCCC_ERR_ADDR_NOT_USABLE, plc);
+        make_pccc_error(client, PCCC_ERR_ADDR_NOT_USABLE);
+        return PCCC_ERR_ADDR_NOT_USABLE;
     }
 
     /* now we can check the start and end offsets. */
@@ -166,72 +188,88 @@ slice_s handle_plc5_read_request(slice_s input, slice_s output, plc_s *plc)
 
     if(start_byte_offset >= tag_size) {
         info("Starting offset, %u, is greater than tag size, %d!", (unsigned int)start_byte_offset, (unsigned int)tag_size);
-        return make_pccc_error(output, PCCC_ERR_FILE_IS_WRONG_SIZE, plc);
+        make_pccc_error(client, PCCC_ERR_FILE_IS_WRONG_SIZE);
+        return PCCC_ERR_FILE_IS_WRONG_SIZE;
     }
 
     if(end_byte_offset > tag_size) {
         info("Ending offset, %u, is greater than tag size, %d!", (unsigned int)end_byte_offset, (unsigned int)tag_size);
-        return make_pccc_error(output, PCCC_ERR_FILE_IS_WRONG_SIZE, plc);
+        make_pccc_error(client, PCCC_ERR_FILE_IS_WRONG_SIZE);
+        return PCCC_ERR_FILE_IS_WRONG_SIZE;
     }
 
     /* check the amount of data requested. */
     if((end_byte_offset - start_byte_offset) > 240) {
         info("Request asks for too much data, %u bytes, for response packet!", (unsigned int)(end_byte_offset - start_byte_offset));
-        return make_pccc_error(output, PCCC_ERR_FILE_IS_WRONG_SIZE, plc);
+        make_pccc_error(client, PCCC_ERR_FILE_IS_WRONG_SIZE);
+        return PCCC_ERR_FILE_IS_WRONG_SIZE;
     }
 
     info("Transfer size %u, tag elem size %u, bytes to transfer %d.", transfer_size, tag->elem_size, transfer_size * tag->elem_size);
 
     /* build the response. */
-    slice_set_uint8(output, 0, 0x4f);
-    slice_set_uint8(output, 1, 0); /* no error */
-    slice_set_uint16_le(output, 2, plc->pccc_seq_id);
+    buf_set_uint8(response, 0x4f);
+    buf_set_uint8(response, 0); /* no error */
+    buf_set_uint16_le(response, client->conn_config.pccc_seq_id);
 
-    for(size_t i = 0; i < (transfer_size * tag->elem_size); i++) {
-        info("setting byte %d to value %d.", 4 + i, tag->data[start_byte_offset + i]);
-        slice_set_uint8(output, 4 + i, tag->data[start_byte_offset + i]);
+    if(!mutex_lock(&(tag->mutex))) {
+        for(size_t i = 0; i < (transfer_size * tag->elem_size); i++) {
+            info("setting byte %d to value %d.", 4 + i, tag->data[start_byte_offset + i]);
+            buf_set_uint8(response, tag->data[start_byte_offset + i]);
+        }
+
+        mutex_unlock(&(tag->mutex));
+    } else {
+        error("ERROR: Unable to lock mutex!");
     }
 
-    info("Output slice length %d.", slice_len(slice_from_slice(output, 0, 4 + (transfer_size * tag->elem_size))));
+    /* cap off response */
+    buf_set_len(response, buf_get_cursor(response));
 
-    return slice_from_slice(output, 0, 4 + (transfer_size * tag->elem_size));
+    return rc;
 }
 
 
-slice_s handle_plc5_write_request(slice_s input, slice_s output, plc_s *plc)
+int handle_plc5_write_request(tcp_client_p client)
 {
+    int rc = PCCC_OK;
+    buf_t *request = &(client->request);
+    buf_t *response = &(client->response);
     uint16_t offset = 0;
     size_t start_byte_offset = 0;
     uint16_t transfer_size = 0;
     size_t end_byte_offset = 0;
     size_t tag_size = 0;
-    size_t data_start_byte_offset = 0;
     size_t data_len = 0;
     size_t data_file_num = 0;
     size_t data_file_element = 0;
     uint8_t data_file_prefix = 0;
-    tag_def_s *tag = plc->tags;
+    tag_def_s *tag = client->plc->tags;
 
-    info("Got packet:");
-    slice_dump(input);
+    info("Got request:");
+    buf_dump_offset(request, buf_get_cursor(request));
 
-    offset = slice_get_uint16_le(input, 1);
-    transfer_size = slice_get_uint16_le(input, 3);
+    /* eat the command */
+    buf_get_uint8(request);
+
+    offset = buf_get_uint16_le(request);
+    transfer_size = buf_get_uint16_le(request);
 
     /* decode the data file. */
-    data_file_prefix = slice_get_uint8(input, 5);
+    data_file_prefix = buf_get_uint8(request);
 
     /* check the data file prefix. */
     if(data_file_prefix != 0x06) {
         info("Unexpected data file prefix byte %d!", data_file_prefix);
-        return make_pccc_error(output, PCCC_ERR_ADDR_NOT_USABLE, plc);
+        make_pccc_error(client, PCCC_ERR_ADDR_NOT_USABLE);
+        return PCCC_ERR_ADDR_NOT_USABLE;
     }
 
     /* get data file number. */
-    data_file_num = slice_get_uint8(input, 6);
+    data_file_num = buf_get_uint8(request);
 
     /* get the data element number. */
-    data_file_element = slice_get_uint8(input, 7);
+    data_file_element = buf_get_uint8(request);
 
     /* find the tag. */
     while(tag && tag->data_file_num != data_file_num) {
@@ -240,7 +278,8 @@ slice_s handle_plc5_write_request(slice_s input, slice_s output, plc_s *plc)
 
     if(!tag) {
         info("Unable to find tag with data file %u!", data_file_num);
-        return make_pccc_error(output, PCCC_ERR_ADDR_NOT_USABLE, plc);
+        make_pccc_error(client, PCCC_ERR_ADDR_NOT_USABLE);
+        return PCCC_ERR_ADDR_NOT_USABLE;
     }
 
     /*
@@ -254,41 +293,56 @@ slice_s handle_plc5_write_request(slice_s input, slice_s output, plc_s *plc)
 
     if(start_byte_offset >= tag_size) {
         info("Starting offset, %u, is greater than tag size, %d!", (unsigned int)start_byte_offset, (unsigned int)tag_size);
-        return make_pccc_error(output, PCCC_ERR_FILE_IS_WRONG_SIZE, plc);
+        make_pccc_error(client, PCCC_ERR_FILE_IS_WRONG_SIZE);
+        return PCCC_ERR_FILE_IS_WRONG_SIZE;
     }
 
     if(end_byte_offset > tag_size) {
         info("Ending offset, %u, is greater than tag size, %d!", (unsigned int)end_byte_offset, (unsigned int)tag_size);
-        return make_pccc_error(output, PCCC_ERR_FILE_IS_WRONG_SIZE, plc);
+        make_pccc_error(client, PCCC_ERR_FILE_IS_WRONG_SIZE);
+        return PCCC_ERR_FILE_IS_WRONG_SIZE;
     }
 
-    data_start_byte_offset = 8;
-    data_len = slice_len(input) - 8;
+    data_len = buf_len(request) - 8;
 
     if(data_len != (transfer_size * tag->elem_size)) {
         info("Data in packet is not the same length, %u, as the requested transfer, %d!", data_len, (transfer_size * tag->elem_size));
-        return make_pccc_error(output, PCCC_ERR_FILE_IS_WRONG_SIZE, plc);
+        make_pccc_error(client, PCCC_ERR_FILE_IS_WRONG_SIZE);
+        return PCCC_ERR_FILE_IS_WRONG_SIZE;
     }
 
     /* copy the data into the tag. */
-    for(size_t i = 0; i < (transfer_size * tag->elem_size); i++) {
-        info("setting byte %d to value %d.", start_byte_offset + i, slice_get_uint8(input, data_start_byte_offset + i));
-        tag->data[start_byte_offset + i] = slice_get_uint8(input, data_start_byte_offset + i);
+    if(!mutex_lock(&(tag->mutex))) {
+        for(size_t i = 0; i < (transfer_size * tag->elem_size); i++) {
+            uint8_t tmp_u8 = buf_get_uint8(request);
+            info("setting byte %d to value %d.", start_byte_offset + i, tmp_u8);
+            tag->data[start_byte_offset + i] = tmp_u8;
+        }
+
+        mutex_unlock(&(tag->mutex));
+    } else {
+        error("ERROR: Unable to lock mutex!");
     }
 
     info("Transfer size %u, tag elem size %u, bytes to transfer %d.", transfer_size, tag->elem_size, transfer_size * tag->elem_size);
 
     /* build the response. */
-    slice_set_uint8(output, 0, 0x4f);
-    slice_set_uint8(output, 1, 0); /* no error */
-    slice_set_uint16_le(output, 2, plc->pccc_seq_id);
+    buf_set_uint8(response, 0x4f);
+    buf_set_uint8(response, PCCC_OK); /* no error */
+    buf_set_uint16_le(response, client->conn_config.pccc_seq_id);
 
-    return slice_from_slice(output, 0, 4);
+    /* cap off response */
+    buf_set_len(response, buf_get_cursor(response));
+
+    return rc;
 }
 
 
-slice_s handle_slc_read_request(slice_s input, slice_s output, plc_s *plc)
+int handle_slc_read_request(tcp_client_p client)
 {
+    int rc = PCCC_OK;
+    buf_t *request = &(client->request);
+    buf_t *response = &(client->response);
     size_t start_byte_offset = 0;
     uint8_t transfer_size = 0;
     size_t end_byte_offset = 0;
@@ -297,10 +351,10 @@ slice_s handle_slc_read_request(slice_s input, slice_s output, plc_s *plc)
     size_t data_file_type = 0;
     size_t data_file_element = 0;
     size_t data_file_subelement = 0;
-    tag_def_s *tag = plc->tags;
+    tag_def_s *tag = client->plc->tags;
 
-    info("Got packet:");
-    slice_dump(input);
+    info("Got request:");
+    buf_dump_offset(request, buf_get_cursor(request));
 
     /*
      * a2 - SLC-type read.
@@ -311,76 +365,102 @@ slice_s handle_slc_read_request(slice_s input, slice_s output, plc_s *plc)
      * <file subelement> - data file subelement.
      */
 
-    transfer_size = slice_get_uint8(input, 1);
-    data_file_num = slice_get_uint8(input, 2);
-    data_file_type = slice_get_uint8(input, 3);
-    data_file_element = slice_get_uint8(input, 4);
-    data_file_subelement = slice_get_uint8(input, 5);
+    /* eat the command */
+    buf_get_uint8(request);
+
+    transfer_size = buf_get_uint8(request);
+    data_file_num = buf_get_uint8(request);
+    data_file_type = buf_get_uint8(request);
+    data_file_element = buf_get_uint8(request);
+    data_file_subelement = buf_get_uint8(request);
 
     if(data_file_subelement != 0) {
         info("Data file subelement is unsupported!");
-        return make_pccc_error(output, PCCC_ERR_ADDR_NOT_USABLE, plc);
+        make_pccc_error(client, PCCC_ERR_ADDR_NOT_USABLE);
+        return PCCC_ERR_ADDR_NOT_USABLE;
     }
 
-    /* find the tag. */
-    while(tag && tag->data_file_num != data_file_num) {
-        tag = tag->next_tag;
-    }
+    do {
+        /* find the tag. */
+        while(tag && tag->data_file_num != data_file_num) {
+            tag = tag->next_tag;
+        }
 
-    if(!tag) {
-        info("Unable to find tag with data file %u!", data_file_num);
-        return make_pccc_error(output, PCCC_ERR_ADDR_NOT_USABLE, plc);
-    }
+        if(!tag) {
+            info("Unable to find tag with data file %u!", data_file_num);
+            make_pccc_error(client, PCCC_ERR_ADDR_NOT_USABLE);
+            rc = PCCC_ERR_ADDR_NOT_USABLE;
+            break;
+        }
 
-    if(tag->tag_type != data_file_type) {
-        info("Data file type requested, %u, does not match file type of tag, %d!", data_file_type, tag->tag_type);
-        return make_pccc_error(output, PCCC_ERR_ADDR_NOT_USABLE, plc);
-    }
+        if(tag->tag_type != data_file_type) {
+            info("Data file type requested, %u, does not match file type of tag, %d!", data_file_type, tag->tag_type);
+            make_pccc_error(client, PCCC_ERR_ADDR_NOT_USABLE);
+            rc = PCCC_ERR_ADDR_NOT_USABLE;
+            break;
+        }
 
-    /* now we can check the start and end offsets. */
-    tag_size = tag->elem_count * tag->elem_size;
-    start_byte_offset = (data_file_element * tag->elem_size);
-    end_byte_offset = start_byte_offset + transfer_size;
+        /* now we can check the start and end offsets. */
+        tag_size = tag->elem_count * tag->elem_size;
+        start_byte_offset = (data_file_element * tag->elem_size);
+        end_byte_offset = start_byte_offset + transfer_size;
 
-    info("Start byte offset %u, end byte offset %u.", (unsigned int)start_byte_offset, (unsigned int)end_byte_offset);
+        info("Start byte offset %u, end byte offset %u.", (unsigned int)start_byte_offset, (unsigned int)end_byte_offset);
 
-    if(start_byte_offset >= tag_size) {
-        info("Starting offset, %u, is greater than tag size, %u!", (unsigned int)start_byte_offset, (unsigned int)tag_size);
-        return make_pccc_error(output, PCCC_ERR_FILE_IS_WRONG_SIZE, plc);
-    }
+        if(start_byte_offset >= tag_size) {
+            info("Starting offset, %u, is greater than tag size, %u!", (unsigned int)start_byte_offset, (unsigned int)tag_size);
+            make_pccc_error(client, PCCC_ERR_FILE_IS_WRONG_SIZE);
+            rc = PCCC_ERR_FILE_IS_WRONG_SIZE;
+            break;
+        }
 
-    if(end_byte_offset > tag_size) {
-        info("Ending offset, %u, is greater than tag size, %u!", (unsigned int)end_byte_offset, (unsigned int)tag_size);
-        return make_pccc_error(output, PCCC_ERR_FILE_IS_WRONG_SIZE, plc);
-    }
+        if(end_byte_offset > tag_size) {
+            info("Ending offset, %u, is greater than tag size, %u!", (unsigned int)end_byte_offset, (unsigned int)tag_size);
+            make_pccc_error(client, PCCC_ERR_FILE_IS_WRONG_SIZE);
+            rc = PCCC_ERR_FILE_IS_WRONG_SIZE;
+            break;
+        }
 
-    /* check the amount of data requested. */
-    if(transfer_size > 240) {
-        info("Request asks for too much data, %u bytes, for response packet!", (unsigned int)transfer_size);
-        return make_pccc_error(output, PCCC_ERR_FILE_IS_WRONG_SIZE, plc);
-    }
+        /* check the amount of data requested. */
+        if(transfer_size > 240) {
+            info("Request asks for too much data, %u bytes, for response packet!", (unsigned int)transfer_size);
+            make_pccc_error(client, PCCC_ERR_FILE_IS_WRONG_SIZE);
+            rc = PCCC_ERR_FILE_IS_WRONG_SIZE;
+            break;
+        }
 
-    info("Transfer size %u (in bytes), tag elem size %u.", transfer_size, tag->elem_size);
+        info("Transfer size %u (in bytes), tag elem size %u.", transfer_size, tag->elem_size);
 
-    /* build the response. */
-    slice_set_uint8(output, 0, 0x4f);
-    slice_set_uint8(output, 1, 0); /* no error */
-    slice_set_uint16_le(output, 2, plc->pccc_seq_id);
+        /* build the response. */
+        buf_set_uint8(response, 0x4f);
+        buf_set_uint8(response, PCCC_OK); /* no error */
+        buf_set_uint16_le(response, client->conn_config.pccc_seq_id);
 
-    for(size_t i = 0; i < transfer_size; i++) {
-        info("setting byte %d to value %d.", 4 + i, tag->data[start_byte_offset + i]);
-        slice_set_uint8(output, 4 + i, tag->data[start_byte_offset + i]);
-    }
+        if(!mutex_lock(&(tag->mutex))) {
+            for(size_t i = 0; i < transfer_size; i++) {
+                info("setting byte %d to value %d.", 4 + i, tag->data[start_byte_offset + i]);
+                buf_set_uint8(response, tag->data[start_byte_offset + i]);
+            }
 
-    info("Output slice length %d.", slice_len(slice_from_slice(output, 0, (size_t)4 + (size_t)transfer_size)));
+            mutex_unlock(&(tag->mutex));
+        } else {
+            error("ERROR: Unable to lock tag mutex!");
+        }
 
-    return slice_from_slice(output, 0, (size_t)4 + (size_t)transfer_size);
+        /* cap off the response */
+        buf_set_len(response, buf_get_cursor(response));
+    } while(0);
+
+    return rc;
 }
 
 
 
-slice_s handle_slc_write_request(slice_s input, slice_s output, plc_s *plc)
+int handle_slc_write_request(tcp_client_p client)
 {
+    int rc = PCCC_OK;
+    buf_t *request = &(client->request);
+    buf_t *response = &(client->response);
     size_t start_byte_offset = 0;
     uint8_t transfer_size = 0;
     size_t end_byte_offset = 0;
@@ -390,11 +470,10 @@ slice_s handle_slc_write_request(slice_s input, slice_s output, plc_s *plc)
     size_t data_file_element = 0;
     size_t data_file_subelement = 0;
     size_t data_len = 0;
-    size_t data_start_byte_offset = 0;
-    tag_def_s *tag = plc->tags;
+    tag_def_s *tag = client->plc->tags;
 
-    info("Got packet:");
-    slice_dump(input);
+    info("Got request:");
+    buf_dump_offset(request, buf_get_cursor(request));
 
     /*
      * aa - SLC-type write.
@@ -406,96 +485,119 @@ slice_s handle_slc_write_request(slice_s input, slice_s output, plc_s *plc)
      * ... data ... - data to write.
      */
 
-    transfer_size = slice_get_uint8(input, 1);
-    data_file_num = slice_get_uint8(input, 2);
-    data_file_type = slice_get_uint8(input, 3);
-    data_file_element = slice_get_uint8(input, 4);
-    data_file_subelement = slice_get_uint8(input, 5);
+    /* eat the command */
+    buf_get_uint8(request);
+
+    transfer_size = buf_get_uint8(request);
+    data_file_num = buf_get_uint8(request);
+    data_file_type = buf_get_uint8(request);
+    data_file_element = buf_get_uint8(request);
+    data_file_subelement = buf_get_uint8(request);
 
     if(data_file_subelement != 0) {
         info("Data file subelement is unsupported!");
-        return make_pccc_error(output, PCCC_ERR_ADDR_NOT_USABLE, plc);
+        make_pccc_error(client, PCCC_ERR_ADDR_NOT_USABLE);
+        return PCCC_ERR_ADDR_NOT_USABLE;
     }
 
-    /* find the tag. */
-    while(tag && tag->data_file_num != data_file_num) {
-        tag = tag->next_tag;
-    }
+    do {
+        /* find the tag. */
+        while(tag && tag->data_file_num != data_file_num) {
+            tag = tag->next_tag;
+        }
 
-    if(!tag) {
-        info("Unable to find tag with data file %u!", data_file_num);
-        return make_pccc_error(output, PCCC_ERR_ADDR_NOT_USABLE, plc);
-    }
+        if(!tag) {
+            info("Unable to find tag with data file %u!", data_file_num);
+            make_pccc_error(client, PCCC_ERR_ADDR_NOT_USABLE);
+            rc = PCCC_ERR_ADDR_NOT_USABLE;
+            break;
+        }
 
-    if(tag->tag_type != data_file_type) {
-        info("Data file type requested, %u, does not match file type of tag, %d!", data_file_type, tag->tag_type);
-        return make_pccc_error(output, PCCC_ERR_ADDR_NOT_USABLE, plc);
-    }
+        if(tag->tag_type != data_file_type) {
+            info("Data file type requested, %x, does not match file type of tag, %x!", data_file_type, tag->tag_type);
+            make_pccc_error(client, PCCC_ERR_ADDR_NOT_USABLE);
+            rc = PCCC_ERR_ADDR_NOT_USABLE;
+            break;
+        }
 
-    /* now we can check the start and end offsets. */
-    tag_size = tag->elem_count * tag->elem_size;
-    start_byte_offset = (data_file_element * tag->elem_size);
-    end_byte_offset = start_byte_offset + transfer_size;
+        /* now we can check the start and end offsets. */
+        tag_size = tag->elem_count * tag->elem_size;
+        start_byte_offset = (data_file_element * tag->elem_size);
+        end_byte_offset = start_byte_offset + transfer_size;
 
-    info("Start byte offset %u, end byte offset %u.", (unsigned int)start_byte_offset, (unsigned int)end_byte_offset);
+        info("Start byte offset %u, end byte offset %u.", (unsigned int)start_byte_offset, (unsigned int)end_byte_offset);
 
-    if(start_byte_offset >= tag_size) {
-        info("Starting offset, %u, is greater than tag size, %d!", (unsigned int)start_byte_offset, (unsigned int)tag_size);
-        return make_pccc_error(output, PCCC_ERR_FILE_IS_WRONG_SIZE, plc);
-    }
+        if(start_byte_offset >= tag_size) {
+            info("Starting offset, %u, is greater than tag size, %d!", (unsigned int)start_byte_offset, (unsigned int)tag_size);
+            make_pccc_error(client, PCCC_ERR_FILE_IS_WRONG_SIZE);
+            rc = PCCC_ERR_FILE_IS_WRONG_SIZE;
+            break;
+        }
 
-    if(end_byte_offset > tag_size) {
-        info("Ending offset, %u, is greater than tag size, %d!", (unsigned int)end_byte_offset, (unsigned int)tag_size);
-        return make_pccc_error(output, PCCC_ERR_FILE_IS_WRONG_SIZE, plc);
-    }
+        if(end_byte_offset > tag_size) {
+            info("Ending offset, %u, is greater than tag size, %d!", (unsigned int)end_byte_offset, (unsigned int)tag_size);
+            make_pccc_error(client, PCCC_ERR_FILE_IS_WRONG_SIZE);
+            rc = PCCC_ERR_FILE_IS_WRONG_SIZE;
+            break;
+        }
 
-    /* check the amount of data requested. */
-    if(transfer_size > 240) {
-        info("Request asks for too much data, %u bytes, for response packet!", (unsigned int)transfer_size);
-        return make_pccc_error(output, PCCC_ERR_FILE_IS_WRONG_SIZE, plc);
-    }
+        /* check the amount of data requested. */
+        if(transfer_size > 240) {
+            info("Request asks for too much data, %u bytes, for response packet!", (unsigned int)transfer_size);
+            make_pccc_error(client, PCCC_ERR_FILE_IS_WRONG_SIZE);
+            rc = PCCC_ERR_FILE_IS_WRONG_SIZE;
+            break;
+        }
 
-    info("Transfer size %u (in bytes), tag elem size %u.", transfer_size, tag->elem_size);
+        info("Transfer size %u (in bytes), tag elem size %u.", transfer_size, tag->elem_size);
 
-    data_start_byte_offset = 6;
-    data_len = slice_len(input) - data_start_byte_offset;
+        data_len = buf_len(request) - buf_get_cursor(request);
 
-    if(data_len != transfer_size) {
-        info("Data in packet is not the same length, %u, as the requested transfer, %d!", data_len, transfer_size);
-        return make_pccc_error(output, PCCC_ERR_FILE_IS_WRONG_SIZE, plc);
-    }
+        if(data_len != transfer_size) {
+            info("Data in packet is not the same length, %u, as the requested transfer, %d!", data_len, transfer_size);
+            make_pccc_error(client, PCCC_ERR_FILE_IS_WRONG_SIZE);
+            rc = PCCC_ERR_FILE_IS_WRONG_SIZE;
+            break;
+        }
 
-    /* copy the data into the tag. */
-    for(size_t i = 0; i < transfer_size; i++) {
-        info("setting byte %d to value %d.", start_byte_offset + i, slice_get_uint8(input, data_start_byte_offset + i));
-        tag->data[start_byte_offset + i] = slice_get_uint8(input, data_start_byte_offset + i);
-    }
+        /* copy the data into the tag. */
+        if(!mutex_lock(&(tag->mutex))) {
+            for(size_t i = 0; i < transfer_size; i++) {
+                uint8_t tmp_u8 = buf_get_uint8(request);
+                info("setting byte %d to value %02x.", start_byte_offset + i, tmp_u8);
+                tag->data[start_byte_offset + i] = tmp_u8;
+            }
 
-    info("Transfer size %u, tag elem size %u.", transfer_size, tag->elem_size);
+            mutex_unlock(&(tag->mutex));
+        } else {
+            error("ERROR: Unable to lock mutex!");
+        }
 
-    /* build the response. */
-    slice_set_uint8(output, 0, 0x4f);
-    slice_set_uint8(output, 1, 0); /* no error */
-    slice_set_uint16_le(output, 2, plc->pccc_seq_id);
+        /* build the response. */
+        buf_set_uint8(response, 0x4f);
+        buf_set_uint8(response, PCCC_OK); /* no error */
+        buf_set_uint16_le(response, client->conn_config.pccc_seq_id);
 
-    return slice_from_slice(output, 0, 4);
+        /* cap off response */
+        buf_set_len(response, buf_get_cursor(response));
+    } while(0);
+
+    return rc;
 }
 
 
 
 
-slice_s make_pccc_error(slice_s output, uint8_t err_code, plc_s *plc)
+int make_pccc_error(tcp_client_p client, uint8_t err_code)
 {
+    buf_t *response = &(client->response);
+
     // 4f f0 3c 96 06
-    slice_s err_resp = slice_from_slice(output, 0, 5);
 
-    if(!slice_has_err(err_resp)) {
-        slice_set_uint8(err_resp, 0, (uint8_t)0x4f);
-        slice_set_uint8(err_resp, 1, (uint8_t)0xf0);
-        slice_set_uint16_le(err_resp, 2, plc->pccc_seq_id);
-        slice_set_uint8(err_resp, 4, err_code);
-    }
+    buf_set_uint8(response, (uint8_t)0x4f);
+    buf_set_uint8(response, (uint8_t)0xf0);
+    buf_set_uint16_le(response, client->conn_config.pccc_seq_id);
+    buf_set_uint8(response, err_code);
 
-    return err_resp;
+    return PCCC_OK;
 }
-

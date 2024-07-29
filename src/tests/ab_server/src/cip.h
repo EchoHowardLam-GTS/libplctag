@@ -34,6 +34,24 @@
 #pragma once
 
 #include "plc.h"
-#include "slice.h"
+#include "buf.h"
+#include "tcp_server.h"
 
-extern slice_s cip_dispatch_request(slice_s input, slice_s output, plc_s *context);
+enum {
+    CIP_OK = 0,
+    CIP_ERR_FLAG = 0x01,
+    CIP_ERR_PATH_DEST_UNKNOWN = 0x05,
+    CIP_ERR_FRAG = 0x06,
+    CIP_ERR_UNSUPPORTED = 0x08,
+    CIP_ERR_INSUFFICIENT_DATA = 0x13,
+    CIP_ERR_INVALID_PARAMETER = 0x20,
+
+    CIP_ERR_EXTENDED = 0xFF,
+
+    /* extended errors */
+    CIP_ERR_EX_TOO_LONG = 0x2105,
+    CIP_ERR_EX_DUPLICATE_CONN = 0x100,
+
+};
+
+extern int cip_dispatch_request(tcp_client_p client);

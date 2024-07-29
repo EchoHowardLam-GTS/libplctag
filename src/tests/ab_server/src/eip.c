@@ -34,7 +34,7 @@
 #include <stdlib.h>
 #include "cpf.h"
 #include "eip.h"
-#include "slice.h"
+#include "buf.h"
 #include "tcp_server.h"
 #include "utils.h"
 
@@ -60,100 +60,114 @@ typedef struct {
 } eip_header_s;
 
 
-static slice_s register_session(slice_s input, slice_s output, plc_s *plc, eip_header_s *header);
-static slice_s unregister_session(slice_s input, slice_s output, plc_s *plc, eip_header_s *header);
+static int register_session(tcp_client_p client, eip_header_s *header);
+static int unregister_session(tcp_client_p client, eip_header_s *header);
 
 
-slice_s eip_dispatch_request(slice_s input, slice_s raw_output, plc_s *plc)
+int eip_dispatch_request(tcp_client_p client)
 {
-    slice_s output = slice_from_slice(raw_output, 0, plc->server_to_client_max_packet);
-    slice_s response = slice_from_slice(output, EIP_HEADER_SIZE, slice_len(output) - EIP_HEADER_SIZE);
-
+    int rc = TCP_CLIENT_PROCESSED;
+    buf_t *request = &(client->request);
+    buf_t *response = &(client->response);
     eip_header_s header;
 
+    /* set up the response buffer */
+    client->response = client->buffer;
+
+    /* clamp the maximum response to the amount allowed on the connection. */
+    buf_set_len(response, client->conn_config.server_to_client_max_packet);
+
     info("eip_dispatch_request(): got packet:");
-    slice_dump(input);
+    buf_dump(request);
 
     /* unpack header. */
-    header.command = slice_get_uint16_le(input, 0);
-    header.length = slice_get_uint16_le(input, 2);
-    header.session_handle = slice_get_uint32_le(input, 4);
-    header.status = slice_get_uint32_le(input, 8);
-    header.sender_context = slice_get_uint64_le(input, 12);
-    header.options = slice_get_uint32_le(input, 20);
+    buf_set_cursor(request, 0);
+    header.command = buf_get_uint16_le(request);
+    header.length = buf_get_uint16_le(request);
+    header.session_handle = buf_get_uint32_le(request);
+    header.status = buf_get_uint32_le(request);
+    header.sender_context = buf_get_uint64_le(request);
+    header.options = buf_get_uint32_le(request);
 
     /* sanity checks */
-    if(slice_len(input) != (size_t)(header.length + EIP_HEADER_SIZE)) {
-        info("Illegal EIP packet.   Length should be %d but is %d!", header.length + EIP_HEADER_SIZE, slice_len(input));
-        return slice_make_err(TCP_SERVER_BAD_REQUEST);
+    if(buf_len(request) != (uint16_t)(header.length + (uint16_t)EIP_HEADER_SIZE)) {
+        info("Illegal EIP packet.   Length should be %d but is %d!", header.length + EIP_HEADER_SIZE, buf_len(request));
+        return TCP_CLIENT_BAD_REQUEST;
     }
+
+    /* set up the response */
+    buf_set_len(response, header.length + (uint16_t)EIP_HEADER_SIZE);
+    buf_set_cursor(response, (uint16_t)EIP_HEADER_SIZE);
 
     /* dispatch the request */
     switch(header.command) {
         case EIP_REGISTER_SESSION:
-            response = register_session(slice_from_slice(input, EIP_HEADER_SIZE, EIP_REGISTER_SESSION_SIZE), response, plc, &header);
+            rc = register_session(client, &header);
             break;
 
         case EIP_UNREGISTER_SESSION:
-            response = unregister_session(slice_from_slice(input, EIP_HEADER_SIZE, EIP_REGISTER_SESSION_SIZE), response, plc, &header);
+            rc = unregister_session(client, &header);
             break;
 
         case EIP_UNCONNECTED_SEND:
-            response = handle_cpf_unconnected(slice_from_slice(input, EIP_HEADER_SIZE, slice_len(input) - EIP_HEADER_SIZE),
-                                              slice_from_slice(output, EIP_HEADER_SIZE, slice_len(output) - EIP_HEADER_SIZE),
-                                              plc);
+            rc = handle_cpf_unconnected(client);
             break;
 
         case EIP_CONNECTED_SEND:
-            response = handle_cpf_connected(slice_from_slice(input, EIP_HEADER_SIZE, slice_len(input) - EIP_HEADER_SIZE),
-                                            slice_from_slice(output, EIP_HEADER_SIZE, slice_len(output) - EIP_HEADER_SIZE),
-                                            plc);
+            rc = handle_cpf_connected(client);
             break;
 
         default:
-            response = slice_make_err(TCP_SERVER_UNSUPPORTED);
+            rc = TCP_CLIENT_UNSUPPORTED;
             break;
     }
 
-    if(!slice_has_err(response)) {
+    if(rc == EIP_OK) {
         /* build response */
-        slice_set_uint16_le(output, 0, header.command);
-        slice_set_uint16_le(output, 2, (uint16_t)slice_len(response));
-        slice_set_uint32_le(output, 4, plc->session_handle);
-        slice_set_uint32_le(output, 8, (uint32_t)0); /* status == 0 -> no error */
-        slice_set_uin64_le(output, 12, plc->sender_context);
-        slice_set_uint32_le(output, 20, header.options);
+        buf_set_cursor(response, 0);
+        buf_set_uint16_le(response, header.command);
+        buf_set_uint16_le(response, (uint16_t)(buf_len(response) - (uint16_t)EIP_HEADER_SIZE));
+        buf_set_uint32_le(response, client->conn_config.session_handle);
+        buf_set_uint32_le(response, (uint32_t)0); /* status == 0 -> no error */
+        buf_set_uint64_le(response, client->conn_config.sender_context);
+        buf_set_uint32_le(response, header.options);
 
         /* The payload is already in place. */
-        return slice_from_slice(output, 0, EIP_HEADER_SIZE + slice_len(response));
-    } else if(slice_get_err(response) == TCP_SERVER_DONE) {
+        return EIP_OK;
+    } else if(rc == TCP_CLIENT_DONE) {
         /* just pass this through, normally not an error. */
         info("Done with connection.");
 
-        return response;
+        return rc;
     } else {
         /* error condition. */
-        slice_set_uint16_le(output, 0, header.command);
-        slice_set_uint16_le(output, 2, (uint16_t)0);  /* no payload. */
-        slice_set_uint32_le(output, 4, plc->session_handle);
-        slice_set_uint32_le(output, 8, (uint32_t)(int32_t)slice_get_err(response)); /* status */
-        slice_set_uin64_le(output, 12, plc->sender_context);
-        slice_set_uint32_le(output, 20, header.options);
+        buf_set_len(response, (uint16_t)EIP_HEADER_SIZE);
 
-        return slice_from_slice(output, 0, EIP_HEADER_SIZE);
+        buf_set_uint16_le(response, header.command);
+        buf_set_uint16_le(response, (uint16_t)0);  /* no payload. */
+        buf_set_uint32_le(response, client->conn_config.session_handle);
+        buf_set_uint32_le(response, (uint32_t)rc); /* status */
+        buf_set_uint64_le(response, client->conn_config.sender_context);
+        buf_set_uint32_le(response, header.options);
+
+        return TCP_CLIENT_BAD_REQUEST;
     }
 }
 
 
-slice_s register_session(slice_s input, slice_s output, plc_s *plc, eip_header_s *header)
+int register_session(tcp_client_p client, eip_header_s *header)
 {
     struct {
         uint16_t eip_version;
         uint16_t option_flags;
     } register_request;
 
-    register_request.eip_version = slice_get_uint16_le(input, 0);
-    register_request.option_flags = slice_get_uint16_le(input, 2);
+    buf_t *request = &(client->request);
+    buf_t *response = response;
+
+    /* the cursor is set by the calling routine */
+    register_request.eip_version = buf_get_uint16_le(request);
+    register_request.option_flags = buf_get_uint16_le(request);
 
     /* sanity checks.  The command and packet length are checked by now. */
 
@@ -161,66 +175,66 @@ slice_s register_session(slice_s input, slice_s output, plc_s *plc, eip_header_s
     if(header->session_handle != (uint32_t)0) {
         info("Request failed sanity check: request session handle is %u but should be zero.", header->session_handle);
 
-        return slice_make_err(EIP_ERR_BAD_REQUEST);
+        return EIP_ERR_BAD_REQUEST;
     }
 
     /* session status must be zero. */
     if(header->status != (uint32_t)0) {
         info("Request failed sanity check: request status is %u but should be zero.", header->status);
 
-        return slice_make_err(EIP_ERR_BAD_REQUEST);
+        return EIP_ERR_BAD_REQUEST;
     }
 
-    /* session sender plc must be zero. */
+    /* session sender context must be zero. */
     if(header->sender_context != (uint64_t)0) {
         info("Request failed sanity check: request sender context should be zero.");
 
-        return slice_make_err(EIP_ERR_BAD_REQUEST);
+        return EIP_ERR_BAD_REQUEST;
     }
 
     /* session options must be zero. */
     if(header->options != (uint32_t)0) {
         info("Request failed sanity check: request options is %u but should be zero.", header->options);
 
-        return slice_make_err(EIP_ERR_BAD_REQUEST);
+        return EIP_ERR_BAD_REQUEST;
     }
 
     /* EIP version must be 1. */
     if(register_request.eip_version != EIP_VERSION) {
         info("Request failed sanity check: request EIP version is %u but should be %u.", register_request.eip_version, EIP_VERSION);
 
-        return slice_make_err(EIP_ERR_BAD_REQUEST);
+        return EIP_ERR_BAD_REQUEST;
     }
 
     /* Session request option flags must be zero. */
     if(register_request.option_flags != (uint16_t)0) {
         info("Request failed sanity check: request option flags field is %u but should be zero.",register_request.option_flags);
 
-        return slice_make_err(EIP_ERR_BAD_REQUEST);
+        return EIP_ERR_BAD_REQUEST;
     }
 
     /* all good, generate a session handle. */
-    plc->session_handle = header->session_handle = (uint32_t)rand();
+    client->conn_config.session_handle = header->session_handle = (uint32_t)rand();
 
-    /* build the response. */
-    slice_set_uint16_le(output, 0, register_request.eip_version);
-    slice_set_uint16_le(output, 2, register_request.option_flags);
+    /* build the response. The calling routine set the cursor. */
+    buf_set_uint16_le(response, register_request.eip_version);
+    buf_set_uint16_le(response, register_request.option_flags);
 
-    return slice_from_slice(output, 0, EIP_REGISTER_SESSION_SIZE);
+    return EIP_OK;
 }
 
 
-slice_s unregister_session(slice_s input, slice_s output, plc_s *plc, eip_header_s *header)
+int unregister_session(tcp_client_p client, eip_header_s *header)
 {
-    (void)input;
-    (void)output;
-    (void)header;
+    buf_t *request = &(client->request);
+    buf_t *response = response;
 
-    if(header->session_handle == plc->session_handle) {
-        return slice_make_err(TCP_SERVER_DONE);
+    /* the caller set the cursor */
+    // buf_set_uint16_le(response);
+    if(header->session_handle == client->conn_config.session_handle) {
+        return EIP_OK;
     } else {
-        return slice_make_err(EIP_ERR_BAD_REQUEST);
+        info("WARN: session handle does not match session handle in the unregister session request!");
+        return EIP_ERR_BAD_REQUEST;
     }
 }
-
-

@@ -35,6 +35,7 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include "compat.h"
 
 
 typedef uint16_t tag_type_t;
@@ -62,6 +63,7 @@ typedef uint16_t tag_type_t;
 struct tag_def_s {
     struct tag_def_s *next_tag;
     char *name;
+    mutex_t mutex; /* only one thread at a time can access. */
     tag_type_t tag_type;
     size_t elem_size;
     size_t elem_count;
@@ -82,14 +84,7 @@ typedef enum {
     PLC_MICROLOGIX
 } plc_type_t;
 
-/* Define the context that is passed around. */
-typedef struct {
-    plc_type_t plc_type;
-    const char* port_str;
-    uint8_t path[20];
-    uint8_t path_len;
-
-    /* connection info. */
+struct plc_connection_config {
     uint32_t session_handle;
     uint64_t sender_context;
     uint32_t server_connection_id;
@@ -113,8 +108,18 @@ typedef struct {
 
     /* response delay */
     int response_delay;
+};
+
+/* Define the context that is passed around. */
+typedef struct {
+    plc_type_t plc_type;
+    const char* port_str;
+    uint8_t path[20];
+    uint8_t path_len;
 
     /* list of tags served by this "PLC" */
     struct tag_def_s *tags;
-} plc_s;
 
+    /* connection info. defaults */
+    struct plc_connection_config default_conn_config;
+} plc_s;
