@@ -256,16 +256,24 @@ int socket_accept(int sock)
 
 
 /* we can read from the cursor to the data length */
-int socket_read(int sock, buf_t *in_buf)
+int socket_read(int sock, buf_t *buf)
 {
-    uint16_t remaining_buf_space = buf_cap(in_buf) - buf_len(in_buf);
+    uint16_t remaining_buf_space = 0;
     uint8_t *data_start = NULL;
-    uint16_t old_cursor = buf_get_cursor(in_buf);
 
-    /* seek to the current end of the data */
-    buf_set_cursor(in_buf, buf_len(in_buf));
-    data_start = buf_peek_bytes(in_buf);
-    buf_set_cursor(in_buf, old_cursor);
+    remaining_buf_space = buf_unused_len(buf);
+
+    if(remaining_buf_space == 0) {
+        info("WARN: No space left in buffer!");
+        return SOCKET_ERR_READ;
+    }
+
+    data_start = buf_data_ptr(buf, buf_end(buf));
+
+    if(!data_start) {
+        info("WARN: data pointer is NULL!");
+        return SOCKET_ERR_READ;
+    }
 
 #ifdef IS_WINDOWS
     int rc = (int)recv(sock, (char *)data_start, (int)remaining_buf_space, 0);
@@ -291,10 +299,10 @@ int socket_read(int sock, buf_t *in_buf)
         //info("WARN: Socket read returned zero or error.");
     } else {
         /* grow the buf size to include the data we just read. */
-        buf_set_len(in_buf, buf_len(in_buf) + (uint16_t)rc);
+        buf_set_end(buf, buf_end(buf) + (uint16_t)rc);
 
-        info("socket_read(): Got data from socket:");
-        buf_dump(in_buf);
+        info("socket_read(): read data:");
+        buf_dump(buf);
     }
 
     return rc;
@@ -302,22 +310,32 @@ int socket_read(int sock, buf_t *in_buf)
 
 
 /* this blocks until all the data is written or there is an error. */
-int socket_write(int sock, buf_t *out_buf)
+int socket_write(int sock, buf_t *buf)
 {
     int rc = 0;
     uint16_t bytes_written = 0;
-    uint16_t data_len = buf_get_cursor(out_buf);
+    uint16_t data_len = 0;
     uint8_t *data_start = NULL;
-    uint16_t bytes_to_write = data_len;
+    uint16_t bytes_to_write = 0;
+
+    if(!buf) {
+        info("WARN: Null buffer pointer!");
+        return SOCKET_ERR_WRITE;
+    }
 
     /* write until we exhaust the data. The buf length marks the end of the data. */
 
-    info("socket_write(): writing packet:");
-    buf_dump(out_buf);
+    info("socket_write(): writing data:");
+    buf_dump(buf);
 
-    /* reset the cursor and get the data start */
-    buf_set_cursor(out_buf, 0);
-    data_start = buf_peek_bytes(out_buf);
+    data_start = buf_data_ptr(buf, 0);
+
+    if(!data_start) {
+        info("WARN: Null data pointer!");
+        return SOCKET_ERR_WRITE;
+    }
+
+    bytes_to_write = buf_len(buf);
 
     do {
 #ifdef IS_WINDOWS
@@ -351,8 +369,6 @@ int socket_write(int sock, buf_t *out_buf)
             bytes_to_write = data_len - bytes_written;
         }
     } while(bytes_written < data_len);
-
-    buf_set_cursor(out_buf, data_len);
 
     return (int)(unsigned int)bytes_written;
 }

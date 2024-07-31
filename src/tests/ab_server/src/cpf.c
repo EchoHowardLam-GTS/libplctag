@@ -71,6 +71,115 @@ typedef struct {
 
 
 
+
+int handle_cpf_connected(tcp_client_p client)
+{
+    int rc;
+    buf_t *request = &(client->request);
+    buf_t *response = &(client->response);
+    uint16_t cpf_start_offset = 0;
+    uint16_t cip_start_offset = 0;
+    cpf_co_header_s header;
+
+    /* we must have some sort of payload. */
+    if(buf_len(request) <= CPF_CONN_HEADER_SIZE) {
+        info("Unusable size of connected CPF packet!");
+        return EIP_ERR_BAD_REQUEST;
+    }
+
+    cpf_start_offset = buf_get_start(request);
+
+    /* unpack the request. */
+    header.interface_handle = buf_get_uint32_le(request);
+    header.router_timeout = buf_get_uint16_le(request);
+    header.item_count = buf_get_uint16_le(request);
+
+    /* sanity check the number of items. */
+    if(header.item_count != (uint16_t)2) {
+        info("Unsupported connected CPF packet, expected two items but found %u!", header.item_count);
+        return EIP_ERR_BAD_REQUEST;
+    }
+
+    header.item_addr_type = buf_get_uint16_le(request);
+    header.item_addr_length = buf_get_uint16_le(request);
+    header.conn_id = buf_get_uint32_le(request);
+    header.item_data_type = buf_get_uint16_le(request);
+    header.item_data_length = buf_get_uint16_le(request);
+
+    /* for some reason the connection sequence ID is
+     * considered to be part of the CIP packet not the CPF
+     * packet.   So get the cursor here and then get the seq ID.
+     */
+    cip_start_offset = buf_start(request) + buf_get_cursor(request);
+
+    header.conn_seq = buf_get_uint16_le(request);
+
+    /* sanity check the data. */
+    if(header.item_addr_type != CPF_ITEM_CAI) {
+        info("Expected connected address item but found %x!", header.item_addr_type);
+        return EIP_ERR_BAD_REQUEST;
+    }
+
+    if(header.item_addr_length != 4) {
+        info("Expected address item length of 4 but found %d bytes!", header.item_addr_length);
+        return EIP_ERR_BAD_REQUEST;
+    }
+
+    if(header.conn_id != client->conn_config.server_connection_id) {
+        info("Expected connection ID %x but found connection ID %x!", client->conn_config.server_connection_id, header.conn_id);
+        return EIP_ERR_BAD_REQUEST;
+    }
+
+    if(header.item_data_type != CPF_ITEM_CDI) {
+        info("Expected connected data item but found %x!", header.item_data_type);
+        return EIP_ERR_BAD_REQUEST;
+    }
+
+    if(header.item_data_length != (buf_len(request) - cip_start_offset)) {
+        info("CPF payload length, %d, does not match passed length, %d!", (buf_len(request) - cip_start_offset), header.item_data_length);
+        return EIP_ERR_BAD_REQUEST;
+    }
+
+    /* do we care about the sequence ID?   Should check. */
+    client->conn_config.server_connection_seq = header.conn_seq;
+
+    /*
+     * note that we take the cursor from the request and apply it to the response.
+     * This is OK because everything before the CIP packet is fixed length.  Probably a
+     * bit shady though.
+     */
+    buf_set_start(request, buf_get_cursor(request));
+    buf_set_cursor(request, 0);
+
+    buf_set_start(response, buf_get_cursor(request));
+    buf_set_cursor(request, 0);
+
+    rc = cip_dispatch_request(client);
+
+    if(rc == CIP_OK) {
+        /* build outbound header. */
+        uint16_t cip_payload_size = buf_len(response);
+
+        buf_set_start(response, cpf_start_offset);
+        buf_set_cursor(response, 0);
+
+        buf_set_uint32_le(response, header.interface_handle);
+        buf_set_uint16_le(response, header.router_timeout);
+        buf_set_uint16_le(response, 2); /* two items. */
+        buf_set_uint16_le(response, CPF_ITEM_CAI); /* connected address type. */
+        buf_set_uint16_le(response, 4); /* connection ID is 4 bytes. */
+        buf_set_uint32_le(response, client->conn_config.client_connection_id);
+        buf_set_uint16_le(response, CPF_ITEM_CDI); /* connected data type */
+        buf_set_uint16_le(response, (uint16_t)(cip_payload_size + 2)); /* MAGIC, +2 for the connection sequence ID */
+        buf_set_uint16_le(response, client->conn_config.server_connection_seq);
+    }
+
+    /* errors are pass through. */
+
+    return rc;
+}
+
+
 int handle_cpf_unconnected(tcp_client_p client)
 {
     int rc;
@@ -80,7 +189,7 @@ int handle_cpf_unconnected(tcp_client_p client)
     uint16_t cip_start_offset = 0;
     cpf_uc_header_s header;
 
-    info("handle_cpf_unconnected(): got packet:");
+    info("handle_cpf_unconnected(): got request:");
     buf_dump(request);
 
     /* we must have some sort of payload. */
@@ -89,7 +198,7 @@ int handle_cpf_unconnected(tcp_client_p client)
         return EIP_ERR_BAD_REQUEST;
     }
 
-    cpf_start_offset = buf_get_cursor(request);
+    cpf_start_offset = buf_get_start(request);
 
     /* unpack the request. The caller set the cursor. */
     header.interface_handle = buf_get_uint32_le(request);
@@ -136,13 +245,21 @@ int handle_cpf_unconnected(tcp_client_p client)
      * bit shady though.
      */
     cip_start_offset = buf_get_cursor(request);
-    buf_set_cursor(response, cip_start_offset);
+
+    buf_set_start(request, cip_start_offset);
+    buf_set_cursor(request, 0);
+
+    buf_set_start(response, cip_start_offset);
+    buf_set_cursor(response, 0);
 
     rc = cip_dispatch_request(client);
 
     if(rc == CIP_OK) {
         /* build outbound header. */
-        buf_set_cursor(response, cpf_start_offset);
+        uint16_t cip_payload_size = buf_len(response);
+
+        buf_set_start(response, cpf_start_offset);
+        buf_set_cursor(response, 0);
 
         buf_set_uint32_le(response, header.interface_handle);
         buf_set_uint16_le(response, header.router_timeout);
@@ -150,110 +267,7 @@ int handle_cpf_unconnected(tcp_client_p client)
         buf_set_uint16_le(response, CPF_ITEM_NAI); /* connected address type. */
         buf_set_uint16_le(response, 0); /* No connection ID. */
         buf_set_uint16_le(response, CPF_ITEM_UDI); /* connected data type */
-        buf_set_uint16_le(response, (uint16_t)(buf_len(response) - cip_start_offset));
-    }
-
-    /* errors are pass through. */
-
-    return rc;
-
-}
-
-
-
-int handle_cpf_connected(tcp_client_p client)
-{
-    int rc;
-    buf_t *request = &(client->request);
-    buf_t *response = &(client->response);
-    uint16_t cpf_start_offset = 0;
-    uint16_t cip_start_offset = 0;
-    cpf_co_header_s header;
-
-    /* we must have some sort of payload. */
-    if(buf_len(request) <= CPF_CONN_HEADER_SIZE) {
-        info("Unusable size of connected CPF packet!");
-        return EIP_ERR_BAD_REQUEST;
-    }
-
-    cpf_start_offset = buf_get_cursor(request);
-
-    /* unpack the request. */
-    header.interface_handle = buf_get_uint32_le(request);
-    header.router_timeout = buf_get_uint16_le(request);
-    header.item_count = buf_get_uint16_le(request);
-
-    /* sanity check the number of items. */
-    if(header.item_count != (uint16_t)2) {
-        info("Unsupported connected CPF packet, expected two items but found %u!", header.item_count);
-        return EIP_ERR_BAD_REQUEST;
-    }
-
-    header.item_addr_type = buf_get_uint16_le(request);
-    header.item_addr_length = buf_get_uint16_le(request);
-    header.conn_id = buf_get_uint32_le(request);
-    header.item_data_type = buf_get_uint16_le(request);
-    header.item_data_length = buf_get_uint16_le(request);
-
-    /* for some reason the connection sequence ID is
-     * considered to be part of the CIP packet not the CPF
-     * packet.   So get the cursor here and then get the seq ID.
-     */
-    cip_start_offset = buf_get_cursor(request);
-
-    header.conn_seq = buf_get_uint16_le(request);
-
-    /* sanity check the data. */
-    if(header.item_addr_type != CPF_ITEM_CAI) {
-        info("Expected connected address item but found %x!", header.item_addr_type);
-        return EIP_ERR_BAD_REQUEST;
-    }
-
-    if(header.item_addr_length != 4) {
-        info("Expected address item length of 4 but found %d bytes!", header.item_addr_length);
-        return EIP_ERR_BAD_REQUEST;
-    }
-
-    if(header.conn_id != client->conn_config.server_connection_id) {
-        info("Expected connection ID %x but found connection ID %x!", client->conn_config.server_connection_id, header.conn_id);
-        return EIP_ERR_BAD_REQUEST;
-    }
-
-    if(header.item_data_type != CPF_ITEM_CDI) {
-        info("Expected connected data item but found %x!", header.item_data_type);
-        return EIP_ERR_BAD_REQUEST;
-    }
-
-    if(header.item_data_length != (buf_len(request) - cip_start_offset)) {
-        info("CPF payload length, %d, does not match passed length, %d!", (buf_len(request) - cip_start_offset), header.item_data_length);
-        return EIP_ERR_BAD_REQUEST;
-    }
-
-    /* do we care about the sequence ID?   Should check. */
-    client->conn_config.server_connection_seq = header.conn_seq;
-
-    /*
-     * note that we take the cursor from the request and apply it to the response.
-     * This is OK because everything before the CIP packet is fixed length.  Probably a
-     * bit shady though.
-     */
-    buf_set_cursor(response, buf_get_cursor(request));
-
-    rc = cip_dispatch_request(client);
-
-    if(rc == CIP_OK) {
-        /* build outbound header. */
-        buf_set_cursor(response, cpf_start_offset);
-
-        buf_set_uint32_le(response, header.interface_handle);
-        buf_set_uint16_le(response, header.router_timeout);
-        buf_set_uint16_le(response, 2); /* two items. */
-        buf_set_uint16_le(response, CPF_ITEM_CAI); /* connected address type. */
-        buf_set_uint16_le(response, 4); /* connection ID is 4 bytes. */
-        buf_set_uint32_le(response, client->conn_config.client_connection_id);
-        buf_set_uint16_le(response, CPF_ITEM_CDI); /* connected data type */
-        buf_set_uint16_le(response, (uint16_t)(buf_len(response) - cip_start_offset));
-        buf_set_uint16_le(response, client->conn_config.server_connection_seq);
+        buf_set_uint16_le(response, (uint16_t)(cip_payload_size));
     }
 
     /* errors are pass through. */

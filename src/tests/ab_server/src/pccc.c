@@ -66,65 +66,77 @@ int dispatch_pccc_request(tcp_client_p client)
     int rc = PCCC_OK;
     buf_t *request = &(client->request);
     buf_t *response = &(client->response);
+    uint16_t response_start_offset = 0;
     uint16_t pccc_request_size = 0;
-    uint16_t response_prefix_offset = 0;
+    // uint16_t response_prefix_offset = 0;
 
-    info("Got packet:");
-    buf_dump_offset(request, buf_get_cursor(request));
+    info("Dispatching PCCC request:");
+    buf_dump(request);
 
-    pccc_request_size = buf_len(request) - buf_get_cursor(request);
+    response_start_offset = buf_start(request);
 
-    if(pccc_request_size < 20) { /* FIXME - 13 + 7 */
-        info("Packet too short!");
-        make_pccc_error(client, PCCC_ERR_FILE_IS_WRONG_SIZE);
-        return PCCC_ERR_FILE_IS_WRONG_SIZE;
-    }
+    /* skip past the prefix */
+    buf_set_start(response, buf_start(response) + sizeof(PCCC_RESP_PREFIX));
 
-    // /* copy the response prefix. */
-    // for(size_t i=0; i < sizeof(PCCC_RESP_PREFIX); i++) {
-    //     buf_set_uint8(response, PCCC_RESP_PREFIX[i]);
-    // }
+    pccc_request_size = buf_len(request);
 
-    response_prefix_offset = buf_get_cursor(response);
-
-    buf_set_cursor(response, buf_get_cursor(response) + sizeof(PCCC_RESP_PREFIX));
-
-    if(buf_match_bytes(request, PCCC_PREFIX, sizeof(PCCC_PREFIX))) {
-        buf_t pccc_command;
-
-        info("Matched valid PCCC prefix.");
-
-        /* two pad or ignored bytes */
-        buf_get_uint8(request);
-        buf_get_uint8(request);
-
-        client->conn_config.pccc_seq_id = buf_get_uint16_le(request);
-
-        /* match the command. */
-        if(client->plc->plc_type == PLC_PLC5 && buf_match_bytes(request, PLC5_READ, sizeof(PLC5_READ))) {
-            rc = handle_plc5_read_request(client);
-        } else if(client->plc->plc_type == PLC_PLC5 && buf_match_bytes(request, PLC5_WRITE, sizeof(PLC5_WRITE))) {
-            rc = handle_plc5_write_request(client);
-        } else if((client->plc->plc_type == PLC_SLC || client->plc->plc_type == PLC_MICROLOGIX) && buf_match_bytes(request, SLC_READ, sizeof(SLC_READ))) {
-            rc = handle_slc_read_request(client);
-        } else if((client->plc->plc_type == PLC_SLC || client->plc->plc_type == PLC_MICROLOGIX) && buf_match_bytes(request, SLC_WRITE, sizeof(SLC_WRITE))) {
-            rc = handle_slc_write_request(client);
-        } else {
-            info("Unsupported PCCC command!");
-            make_pccc_error(client, PCCC_ERR_UNSUPPORTED_COMMAND);
-            rc = PCCC_ERR_UNSUPPORTED_COMMAND;
+    do {
+        if(pccc_request_size < 20) { /* FIXME - 13 + 7 */
+            info("Packet too short!");
+            make_pccc_error(client, PCCC_ERR_FILE_IS_WRONG_SIZE);
+            rc = PCCC_ERR_FILE_IS_WRONG_SIZE;
+            break;
         }
-    }
+
+        // response_prefix_offset = buf_get_cursor(response);
+
+        if(buf_match_bytes(request, PCCC_PREFIX, sizeof(PCCC_PREFIX))) {
+            buf_t pccc_command;
+
+            info("Matched valid PCCC prefix.");
+
+            /* skip past the prefix */
+            buf_set_start(request, buf_start(request) + sizeof(PCCC_RESP_PREFIX));
+
+            /* two pad or ignored bytes */
+            buf_get_uint8(request);
+            buf_get_uint8(request);
+
+            client->conn_config.pccc_seq_id = buf_get_uint16_le(request);
+
+            /* match the command. */
+            if(client->plc->plc_type == PLC_PLC5 && buf_match_bytes(request, PLC5_READ, sizeof(PLC5_READ))) {
+                rc = handle_plc5_read_request(client);
+            } else if(client->plc->plc_type == PLC_PLC5 && buf_match_bytes(request, PLC5_WRITE, sizeof(PLC5_WRITE))) {
+                rc = handle_plc5_write_request(client);
+            } else if((client->plc->plc_type == PLC_SLC || client->plc->plc_type == PLC_MICROLOGIX) && buf_match_bytes(request, SLC_READ, sizeof(SLC_READ))) {
+                rc = handle_slc_read_request(client);
+            } else if((client->plc->plc_type == PLC_SLC || client->plc->plc_type == PLC_MICROLOGIX) && buf_match_bytes(request, SLC_WRITE, sizeof(SLC_WRITE))) {
+                rc = handle_slc_write_request(client);
+            } else {
+                info("Unsupported PCCC command!");
+                make_pccc_error(client, PCCC_ERR_UNSUPPORTED_COMMAND);
+                rc = PCCC_ERR_UNSUPPORTED_COMMAND;
+                break;
+            }
+        }
+
+
+    } while(0);
+
+    /* cap off response */
+    buf_cap_end(response);
 
     /* back fill the PCCC response prefix */
-    buf_set_cursor(response, response_prefix_offset);
+    buf_set_start(response, response_start_offset);
+    buf_set_cursor(response, 0);
 
     for(size_t i=0; i < sizeof(PCCC_RESP_PREFIX); i++) {
         buf_set_uint8(response, PCCC_RESP_PREFIX[i]);
     }
 
     info("PCCC response:");
-    buf_dump_offset(response, response_prefix_offset);
+    buf_dump(response);
 
     return rc;
 }
@@ -222,9 +234,6 @@ int handle_plc5_read_request(tcp_client_p client)
     } else {
         error("ERROR: Unable to lock mutex!");
     }
-
-    /* cap off response */
-    buf_set_len(response, buf_get_cursor(response));
 
     return rc;
 }
@@ -330,9 +339,6 @@ int handle_plc5_write_request(tcp_client_p client)
     buf_set_uint8(response, 0x4f);
     buf_set_uint8(response, PCCC_OK); /* no error */
     buf_set_uint16_le(response, client->conn_config.pccc_seq_id);
-
-    /* cap off response */
-    buf_set_len(response, buf_get_cursor(response));
 
     return rc;
 }
@@ -446,9 +452,6 @@ int handle_slc_read_request(tcp_client_p client)
         } else {
             error("ERROR: Unable to lock tag mutex!");
         }
-
-        /* cap off the response */
-        buf_set_len(response, buf_get_cursor(response));
     } while(0);
 
     return rc;
@@ -578,8 +581,6 @@ int handle_slc_write_request(tcp_client_p client)
         buf_set_uint8(response, PCCC_OK); /* no error */
         buf_set_uint16_le(response, client->conn_config.pccc_seq_id);
 
-        /* cap off response */
-        buf_set_len(response, buf_get_cursor(response));
     } while(0);
 
     return rc;

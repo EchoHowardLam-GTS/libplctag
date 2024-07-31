@@ -70,15 +70,14 @@ int eip_dispatch_request(tcp_client_p client)
     buf_t *request = &(client->request);
     buf_t *response = &(client->response);
     eip_header_s header;
-
-    /* set up the response buffer */
-    client->response = client->buffer;
-
-    /* clamp the maximum response to the amount allowed on the connection. */
-    buf_set_len(response, client->conn_config.server_to_client_max_packet);
+    uint16_t payload_len = 0;
 
     info("eip_dispatch_request(): got packet:");
     buf_dump(request);
+
+    if(buf_len(request) < EIP_HEADER_SIZE) {
+        return TCP_CLIENT_INCOMPLETE;
+    }
 
     /* unpack header. */
     buf_set_cursor(request, 0);
@@ -90,14 +89,20 @@ int eip_dispatch_request(tcp_client_p client)
     header.options = buf_get_uint32_le(request);
 
     /* sanity checks */
-    if(buf_len(request) != (uint16_t)(header.length + (uint16_t)EIP_HEADER_SIZE)) {
-        info("Illegal EIP packet.   Length should be %d but is %d!", header.length + EIP_HEADER_SIZE, buf_len(request));
-        return TCP_CLIENT_BAD_REQUEST;
+    if(buf_len(request) < (uint16_t)(header.length + (uint16_t)EIP_HEADER_SIZE)) {
+        info("Partial EIP packet, returning for more data.");
+        buf_set_cursor(request, 0);
+
+        return TCP_CLIENT_INCOMPLETE;
     }
 
-    /* set up the response */
-    buf_set_len(response, header.length + (uint16_t)EIP_HEADER_SIZE);
-    buf_set_cursor(response, (uint16_t)EIP_HEADER_SIZE);
+    /* set up the request for the next layer */
+    buf_set_start(request, buf_cursor_abs(request));
+    buf_set_cursor(request, 0);
+
+    /* set up the response.  Reserve space for the EIP header. */
+    buf_set_start(response, (uint16_t)EIP_HEADER_SIZE);
+    buf_set_cursor(response, 0);
 
     /* dispatch the request */
     switch(header.command) {
@@ -109,12 +114,12 @@ int eip_dispatch_request(tcp_client_p client)
             rc = unregister_session(client, &header);
             break;
 
-        case EIP_UNCONNECTED_SEND:
-            rc = handle_cpf_unconnected(client);
-            break;
-
         case EIP_CONNECTED_SEND:
             rc = handle_cpf_connected(client);
+            break;
+
+        case EIP_UNCONNECTED_SEND:
+            rc = handle_cpf_unconnected(client);
             break;
 
         default:
@@ -122,18 +127,25 @@ int eip_dispatch_request(tcp_client_p client)
             break;
     }
 
+    /* cap off the response */
+    buf_cap_end(response);
+
     if(rc == EIP_OK) {
         /* build response */
+        payload_len = buf_len(response);
+
+        buf_set_start(response, 0);
         buf_set_cursor(response, 0);
+
         buf_set_uint16_le(response, header.command);
-        buf_set_uint16_le(response, (uint16_t)(buf_len(response) - (uint16_t)EIP_HEADER_SIZE));
+        buf_set_uint16_le(response, payload_len); /* EIP payload size in bytes */
         buf_set_uint32_le(response, client->conn_config.session_handle);
         buf_set_uint32_le(response, (uint32_t)0); /* status == 0 -> no error */
         buf_set_uint64_le(response, client->conn_config.sender_context);
         buf_set_uint32_le(response, header.options);
 
         /* The payload is already in place. */
-        return EIP_OK;
+        return TCP_CLIENT_PROCESSED;
     } else if(rc == TCP_CLIENT_DONE) {
         /* just pass this through, normally not an error. */
         info("Done with connection.");
@@ -141,7 +153,8 @@ int eip_dispatch_request(tcp_client_p client)
         return rc;
     } else {
         /* error condition. */
-        buf_set_len(response, (uint16_t)EIP_HEADER_SIZE);
+        buf_set_start(response, 0);
+        buf_set_cursor(response, 0);
 
         buf_set_uint16_le(response, header.command);
         buf_set_uint16_le(response, (uint16_t)0);  /* no payload. */
@@ -150,7 +163,7 @@ int eip_dispatch_request(tcp_client_p client)
         buf_set_uint64_le(response, client->conn_config.sender_context);
         buf_set_uint32_le(response, header.options);
 
-        return TCP_CLIENT_BAD_REQUEST;
+        return TCP_CLIENT_PROCESSED;
     }
 }
 
@@ -163,7 +176,7 @@ int register_session(tcp_client_p client, eip_header_s *header)
     } register_request;
 
     buf_t *request = &(client->request);
-    buf_t *response = response;
+    buf_t *response = &(client->response);
 
     /* the cursor is set by the calling routine */
     register_request.eip_version = buf_get_uint16_le(request);
@@ -219,10 +232,6 @@ int register_session(tcp_client_p client, eip_header_s *header)
     /* build the response. The calling routine set the cursor. */
     buf_set_uint16_le(response, register_request.eip_version);
     buf_set_uint16_le(response, register_request.option_flags);
-
-    /* cap off response */
-
-    buf_set_len(response, buf_get_cursor(response));
 
     return EIP_OK;
 }

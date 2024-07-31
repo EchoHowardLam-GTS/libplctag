@@ -44,23 +44,34 @@
 
 
 
+static void reset_buffers(tcp_client_p client)
+{
+    info("Resetting buffers.");
+
+    /* FIXME - this needs to include the header overhead for the size! */
+    client->request = client->buffer;
+    buf_set_cap(&(client->request), client->conn_config.client_to_server_max_packet + 64); /* MAGIC */
+    buf_set_start(&(client->request), 0);
+    buf_set_cursor(&(client->request), 0);
+
+    client->response = client->buffer;
+    buf_set_cap(&(client->response), client->conn_config.server_to_client_max_packet);
+    buf_set_start(&(client->response), 0);
+    buf_set_end(&(client->response), buf_cap(&(client->response)));
+    buf_set_cursor(&(client->response), 0);
+}
+
+
+
 static THREAD_FUNC(tcp_client_connection_handler, raw_client_ptr)
 {
     int rc;
     tcp_client_p client = (tcp_client_p)raw_client_ptr;
     bool done = 0;
 
+    reset_buffers(client);
+
     info("Got new client connection, going into processing loop.");
-
-    /* FIXME - this needs to include the header overhead for the size! */
-    client->request = client->buffer;
-    buf_set_len(&(client->request), client->conn_config.client_to_server_max_packet);
-    client->response = client->buffer;
-    buf_set_len(&(client->response), client->conn_config.server_to_client_max_packet);
-
-    buf_set_cursor(&(client->request), 0);
-    buf_set_cursor(&(client->response), 0);
-
     do {
         rc = TCP_CLIENT_PROCESSED;
 
@@ -92,16 +103,7 @@ static THREAD_FUNC(tcp_client_connection_handler, raw_client_ptr)
             } else {
                 /* all good. Reset the buffers etc. */
 
-                /* FIXME - this needs to include the header overhead for the size! */
-                client->request = client->buffer;
-                buf_set_len(&(client->request), client->conn_config.client_to_server_max_packet);
-                client->response = client->buffer;
-                buf_set_len(&(client->response), client->conn_config.server_to_client_max_packet);
-
-                buf_set_cursor(&(client->request), 0);
-                buf_set_cursor(&(client->response), 0);
-
-                rc = TCP_CLIENT_PROCESSED;
+                reset_buffers(client);
             }
         } else {
             /* there was some sort of error or exceptional condition. */
@@ -115,10 +117,17 @@ static THREAD_FUNC(tcp_client_connection_handler, raw_client_ptr)
                     break;
 
                 case TCP_CLIENT_INCOMPLETE:
+                    // /* set the cursor to the end of the buffer data */
+                    // info("Setting buffer cursor back to %u.", buf_len(&(client->request)));
+                    // buf_set_cursor(&(client->request), buf_len(&(client->request)));
+
+                    // /* return the full length back to what it was. */
+                    // info("Setting buffer length back to %u.", old_length);
+                    // buf_set_len(&(client->request), old_length);
                     break;
 
                 case TCP_CLIENT_UNSUPPORTED:
-                    info("WARN: Unsupported packet!");
+                    info("WARN: Unsupported request!");
                     buf_dump(&(client->request));
                     break;
 
@@ -164,6 +173,7 @@ void tcp_server_run(const char *host, const char *port, int (*handler)(tcp_clien
 
         if(client_fd >= 0) {
             tcp_client_p tcp_client = calloc(1, sizeof(*tcp_client) + buffer_size);
+            thread_t client_thread;
 
             if(!tcp_client) {
                 error("ERROR: Unable to allocate space for new client connection!");
@@ -179,8 +189,16 @@ void tcp_server_run(const char *host, const char *port, int (*handler)(tcp_clien
             /* copy over all the default connection config */
             tcp_client->conn_config = plc->default_conn_config;
 
-            thread_t client_thread;
+            /* set up the request buffer */
+            tcp_client->request = tcp_client->buffer;
+            buf_set_cap(&(tcp_client->request), tcp_client->conn_config.client_to_server_max_packet);
 
+            /* set up the response buffer */
+            tcp_client->response = tcp_client->buffer;
+            buf_set_cap(&(tcp_client->response), tcp_client->conn_config.server_to_client_max_packet);
+
+            /* create the thread for the connection */
+            info("Creating thread to handle the new connection.");
             if(thread_create(&client_thread, tcp_client_connection_handler, (thread_arg_t)tcp_client)) {
                 error("ERROR: Unable to create client connection handler thread!");
             }

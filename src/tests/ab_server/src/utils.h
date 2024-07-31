@@ -51,4 +51,3 @@ extern void error_impl(const char *func, int line, const char *templ, ...);
 #define info(...) info_impl(__func__, __LINE__, __VA_ARGS__)
 extern void info_impl(const char *func, int line, const char *templ, ...);
 extern void buf_dump(buf_t *buf);
-extern void buf_dump_offset(buf_t *buf, uint16_t offset);

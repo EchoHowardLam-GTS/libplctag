@@ -728,32 +728,15 @@ void parse_cip_tag(const char *tag_str, plc_s *plc)
 int request_handler(struct tcp_client *client)
 {
     int rc = TCP_CLIENT_DONE;
-    buf_t *request = &(client->request);
 
-    /* check to see if we have a full packet. */
-    if(buf_len(request) >= EIP_HEADER_SIZE) {
-        buf_set_cursor(&(client->request), 2);
+    /* dispatch the data */
+    rc = eip_dispatch_request(client);
 
-        uint16_t eip_len = buf_get_uint16_le(request);
-
-        if(buf_len(request) >= (uint16_t)((uint16_t)EIP_HEADER_SIZE + eip_len)) {
-            rc = eip_dispatch_request(client);
-
-            /* if there is a response delay requested, then wait a bit. */
-            if(client->conn_config.response_delay > 0) {
-                util_sleep_ms(client->conn_config.response_delay);
-            }
-
-            if(rc == EIP_OK) {
-                rc = TCP_CLIENT_PROCESSED;
-            } else {
-                rc = TCP_CLIENT_BAD_REQUEST;
-            }
-        } else {
-            rc = TCP_CLIENT_INCOMPLETE;
+    /* if there is a response delay requested, then wait a bit. */
+    if(rc == TCP_CLIENT_PROCESSED) {
+        if(client->conn_config.response_delay > 0) {
+            util_sleep_ms(client->conn_config.response_delay);
         }
-    } else {
-        rc = TCP_CLIENT_INCOMPLETE;
     }
 
     /* we do not have a complete packet, get more data. */
