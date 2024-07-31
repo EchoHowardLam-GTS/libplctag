@@ -245,7 +245,7 @@ inline static uint16_t buf_set_cursor(buf_t *buf, uint16_t cursor) {
 
 
 inline static uint16_t buf_peek_byte(buf_t *buf) {
-    return (buf && buf->cursor[buf->tos_index] < buf->end[buf->tos_index] ? buf->data[buf->cursor[buf->tos_index] : UINT16_MAX);
+    return (buf && buf->cursor[buf->tos_index] < buf->end[buf->tos_index] ? buf->data[buf->cursor[buf->tos_index]] : UINT16_MAX);
 }
 
 extern int16_t buf_unpack(buf_t *buf, const char *fmt, ...);
