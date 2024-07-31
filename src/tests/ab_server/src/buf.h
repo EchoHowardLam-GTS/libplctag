@@ -35,195 +35,218 @@
 
 #include <stdbool.h>
 #include <stdint.h>
-#include <stddef.h>
-#include <string.h>
-#include <stdio.h>
 
-#include "compat.h"
+
+enum {
+    BUF_OK,
+    BUF_ERR_UNSUPPORTED_FMT = 1,
+    BUF_ERR_INSUFFICIENT_DATA = 2,
+    BUF_ERR_NULL_PTR,
+};
+
+#define BUF_STACK_DEPTH (8)
 
 typedef struct {
     uint8_t *data;
-    uint16_t data_capacity;
-    uint16_t data_length;
-    uint16_t cursor;
+    uint8_t tos_index;
+    uint16_t capacity[BUF_STACK_DEPTH];
+    uint16_t start[BUF_STACK_DEPTH];
+    uint16_t end[BUF_STACK_DEPTH];
+    uint16_t cursor[BUF_STACK_DEPTH];
 } buf_t;
 
+/*
+Invariants:
+
+All indexes are absolute
+
+All indexes are uint16_t
+
+Valid values are 0-65534/0xFFFE
+
+Error value is 65535/0xFFFF/UINT16_MAX
+
+start <= end
+
+end <= capacity
+
+start <= cursor <= end
+
+Range of data is [start, end)
+
+*/
+
 inline static buf_t buf_make(uint8_t *data, uint16_t len) {
-    return (buf_t){ .data = data, .data_capacity = len, .data_length = 0, .cursor = 0 };
+    buf_t res = {0};
+
+    res.tos_index = 0;
+
+    res.data = data;
+    res.capacity[res.tos_index] = len;
+    res.start[res.tos_index] = 0;
+    res.end[res.tos_index] = 0;
+    res.cursor[res.tos_index] = 0;
+
+    return res;
 }
 
-inline static uint16_t buf_len(buf_t *buf) {
-    return buf->data_length;
-}
+inline static bool buf_push(buf_t *buf) {
+    bool res = false;
 
-inline static bool buf_set_len(buf_t *buf, uint16_t length) {
-    bool rc = true;
+    if(buf) {
+        if(buf->tos_index < BUF_STACK_DEPTH - 1) {
+            buf->tos_index++;
 
-    if(length <= buf->data_capacity) {
-        buf->data_length = length;
-        rc = true;
-    } else {
-        rc = false;
-    }
+            buf->capacity[buf->tos_index] = buf->capacity[buf->tos_index - 1];
+            buf->start[buf->tos_index] = buf->start[buf->tos_index - 1];
+            buf->end[buf->tos_index] = buf->end[buf->tos_index - 1];
+            buf->cursor[buf->tos_index] = buf->cursor[buf->tos_index - 1];
 
-    return rc;
-}
-
-inline static uint16_t buf_get_cursor(buf_t *buf) {
-    return buf->cursor;
-}
-
-inline static bool buf_set_cursor(buf_t *buf, uint16_t cursor) {
-    if(cursor < buf->data_length) {
-        buf->cursor = cursor;
-        return true;
-    } else {
-        return false;
-    }
-}
-
-inline static uint16_t buf_cap(buf_t *buf) {
-    return buf->data_capacity;
-}
-
-inline static uint16_t buf_remaining_space(buf_t *buf) {
-    return buf->data_capacity - buf->data_length;
-}
-
-inline static bool buf_in_bounds(buf_t *buf, uint16_t range_len) {
-    if(buf->cursor + range_len > buf->data_length) {
-        return false;
-    } else {
-	return true;
-    }
-}
-
-
-inline static uint16_t buf_get_uint8(buf_t *buf) {
-    if(buf_in_bounds(buf, 1)) {
-        uint8_t res = buf->data[buf->cursor];
-        buf->cursor++;
-        return (uint16_t)res;
-    } else {
-        return UINT16_MAX;
-    }
-}
-
-inline static bool buf_set_uint8(buf_t *buf, uint8_t val) {
-    if(buf_in_bounds(buf, 1)) {
-        buf->data[buf->cursor] = val;
-        buf->cursor++;
-        return true;
-    } else {
-        return false;
-    }
-}
-
-inline static uint8_t *buf_peek_bytes(buf_t *buf) {
-    return &(buf->data[buf->cursor]);
-}
-
-inline static bool buf_match_bytes(buf_t *buf, const uint8_t *data, uint16_t data_len) {
-    if(buf->data_length - buf->cursor >= data_len) {
-        uint8_t *buf_data = buf_peek_bytes(buf);
-        for(size_t i=0; i < data_len; i++) {
-            /* fprintf(stderr,"Comparing element %d, %x and %x\n", (int)i, (int)buf_get_uint8(s, (ssize_t)i), data[i]); */
-            if(buf_data[i] != data[i]) {
-                return false;
-            }
+            res = true;
         }
-        return true;
-     } else {
-        /* fprintf(stderr, "lengths do not match! Slice has length %d and bytes have length %d!\n", (int)buf_len(s), (int)data_len); */
-        return false;
     }
+
+    return res;
 }
 
-inline static bool buf_match_string(buf_t *buf, const char *data) {
-    return buf_match_bytes(buf, (const uint8_t*)data, (uint16_t)strlen(data));
+inline static bool buf_pop(buf_t *buf) {
+    bool res = false;
+
+    if(buf) {
+        if(buf->tos_index > 0) {
+            buf->tos_index--;
+            res = true;
+        }
+    }
+
+    return res;
 }
 
-/* helper functions to get and set data in a slice. */
+inline static uint16_t buf_capacity(buf_t *buf) {
+    return (buf ? buf->capacity[buf->tos_index] : UINT16_MAX);
+}
 
-inline static uint16_t buf_get_uint16_le(buf_t *input_buf) {
-    uint16_t res = 0;
+inline static bool buf_set_capacity(buf_t *buf, uint16_t capacity) {
+    bool res = false;
 
-    if(buf_in_bounds(input_buf, sizeof(uint16_t))) {
-        res = (uint16_t)(buf_get_uint8(input_buf) + (buf_get_uint8(input_buf) << 8));
+    if(buf) {
+        /* clamp down the end if the capacity is lower */
+        if(capacity < buf->end[buf->tos_index]) {
+            buf->end[buf->tos_index] = capacity;
+        }
+
+        /* clamp down the start if the capacity is lower */
+        if(capacity < buf->start[buf->tos_index]) {
+            buf->start[buf->tos_index] = capacity;
+        }
+
+        /* clamp down the cursor if the capacity is lower */
+        if(capacity < buf->cursor[buf->tos_index]) {
+            buf->cursor[buf->tos_index] = capacity;
+        }
+
+        buf->capacity[buf->tos_index] = capacity;
+
+        res = true;
+    }
+
+    return res;
+}
+
+inline static uint16_t buf_start(buf_t *buf)  {
+    return (buf ? buf->start[buf->tos_index] : UINT16_MAX);
+}
+
+inline static uint16_t buf_set_start(buf_t *buf, uint16_t start) {
+    bool res = false;
+
+    if(buf) {
+        buf->start[buf->tos_index] = start;
+
+        /* clamp down the start if the start is higher than the capacity */
+        if(buf->start[buf->tos_index] > buf->capacity[buf->tos_index]) {
+            buf->start[buf->tos_index] = buf->capacity[buf->tos_index];
+        }
+
+        /* bump up the end if the start is higher */
+        if(buf->start[buf->tos_index] > buf->end[buf->tos_index]) {
+            buf->end[buf->tos_index] = buf->start[buf->tos_index];
+        }
+
+        /* bump up the cursor if the start is higher */
+        if(buf->start[buf->tos_index] > buf->cursor[buf->tos_index]) {
+            buf->cursor[buf->tos_index] = buf->start[buf->tos_index];
+        }
+
+        res = true;
     }
 
     return res;
 }
 
 
-inline static uint32_t buf_get_uint32_le(buf_t *input_buf) {
-    uint32_t res = 0;
+inline static uint16_t buf_end(buf_t *buf)  {
+    return (buf ? buf->end[buf->tos_index] : UINT16_MAX);
+}
 
-    if(buf_in_bounds(input_buf, sizeof(uint32_t))) {
-        res =  (uint32_t)(buf_get_uint8(input_buf))
-             + (uint32_t)(buf_get_uint8(input_buf) << 8)
-             + (uint32_t)(buf_get_uint8(input_buf) << 16)
-             + (uint32_t)(buf_get_uint8(input_buf) << 24);
+inline static uint16_t buf_set_end(buf_t *buf, uint16_t end) {
+    bool res = false;
+
+    if(buf) {
+        buf->end[buf->tos_index] = end;
+
+        /* clamp down the end if the end is higher than the capacity */
+        if(buf->end[buf->tos_index] > buf->capacity[buf->tos_index]) {
+            buf->end[buf->tos_index] = buf->capacity[buf->tos_index];
+        }
+
+        /* clamp down the start if the end is lower */
+        if(buf->start[buf->tos_index] > buf->end[buf->tos_index]) {
+            buf->start[buf->tos_index] = end;
+        }
+
+        /* clamp down the cursor if the end is lower */
+        if(buf->cursor[buf->tos_index] > buf->end[buf->tos_index]) {
+            buf->cursor[buf->tos_index] = buf->end[buf->tos_index];
+        }
+
+        res = true;
     }
 
     return res;
 }
 
 
-inline static uint64_t buf_get_uint64_le(buf_t *input_buf) {
-    uint64_t res = 0;
+inline static uint16_t buf_cursor(buf_t *buf)  {
+    return (buf ? buf->capacity[buf->tos_index] : UINT16_MAX);
+}
 
-    if(buf_in_bounds(input_buf, sizeof(uint64_t))) {
-        res =  ((uint64_t)buf_get_uint8(input_buf))
-             + ((uint64_t)buf_get_uint8(input_buf) << 8)
-             + ((uint64_t)buf_get_uint8(input_buf) << 16)
-             + ((uint64_t)buf_get_uint8(input_buf) << 24)
-             + ((uint64_t)buf_get_uint8(input_buf) << 32)
-             + ((uint64_t)buf_get_uint8(input_buf) << 40)
-             + ((uint64_t)buf_get_uint8(input_buf) << 48)
-             + ((uint64_t)buf_get_uint8(input_buf) << 56);
+inline static uint16_t buf_set_cursor(buf_t *buf, uint16_t cursor) {
+    bool res = false;
+
+    if(buf) {
+        buf->cursor[buf->tos_index] = cursor;
+
+        /* bump up the cursor if the start is higher */
+        if(buf->cursor[buf->tos_index] > buf->start[buf->tos_index]) {
+            buf->cursor[buf->tos_index] = buf->start[buf->tos_index];
+        }
+
+        /* drop the cursor if the end is higher */
+        if(buf->cursor[buf->tos_index] > buf->end[buf->tos_index]) {
+            buf->cursor[buf->tos_index] = buf->end[buf->tos_index];
+        }
+
+        res = true;
     }
 
     return res;
 }
 
 
-inline static bool buf_set_uint16_le(buf_t *output_buf, uint16_t val) {
-    if(buf_in_bounds(output_buf, sizeof(uint16_t))) {
-        buf_set_uint8(output_buf, (uint8_t)(val & 0xFF));
-        buf_set_uint8(output_buf, (uint8_t)((val >> 8) & 0xFF));
-        return true;
-    } else {
-        return false;
-    }
+inline static uint16_t buf_peek_byte(buf_t *buf) {
+    return (buf && buf->cursor[buf->tos_index] < buf->end[buf->tos_index] ? buf->data[buf->cursor[buf->tos_index] : UINT16_MAX);
 }
 
-
-inline static bool buf_set_uint32_le(buf_t *output_buf, uint32_t val) {
-    if(buf_in_bounds(output_buf, sizeof(uint32_t))) {
-        buf_set_uint8(output_buf, (uint8_t)(val & 0xFF));
-        buf_set_uint8(output_buf, (uint8_t)((val >> 8) & 0xFF));
-        buf_set_uint8(output_buf, (uint8_t)((val >> 16) & 0xFF));
-        buf_set_uint8(output_buf, (uint8_t)((val >> 24) & 0xFF));
-        return true;
-    } else {
-        return false;
-    }
-}
-
-
-inline static bool buf_set_uint64_le(buf_t *output_buf, uint64_t val) {
-    if(buf_in_bounds(output_buf, sizeof(uint64_t))) {
-        buf_set_uint8(output_buf, (uint8_t)(val & 0xFF));
-        buf_set_uint8(output_buf, (uint8_t)((val >> 8) & 0xFF));
-        buf_set_uint8(output_buf, (uint8_t)((val >> 16) & 0xFF));
-        buf_set_uint8(output_buf, (uint8_t)((val >> 24) & 0xFF));
-        buf_set_uint8(output_buf, (uint8_t)((val >> 32) & 0xFF));
-        buf_set_uint8(output_buf, (uint8_t)((val >> 40) & 0xFF));
-        buf_set_uint8(output_buf, (uint8_t)((val >> 48) & 0xFF));
-        buf_set_uint8(output_buf, (uint8_t)((val >> 56) & 0xFF));
-        return true;
-    } else {
-        return false;
-    }
-}
+extern int16_t buf_unpack(buf_t *buf, const char *fmt, ...);
+extern int16_t buf_pack(buf_t *buf, const char *fmt, ...);
