@@ -571,18 +571,21 @@ elseif (BUILD_EXAMPLES)
 
     # build the simulator for testing.
     # if(UNIX)
-    set(AB_SERVER_FILES     ${test_SRC_PATH}/ab_server/src/buf.h
-                            ${test_SRC_PATH}/ab_server/src/cip.c
+    set(AB_SERVER_FILES     ${test_SRC_PATH}/ab_server/src/cip.c
                             ${test_SRC_PATH}/ab_server/src/cip.h
                             ${test_SRC_PATH}/ab_server/src/compat.h
                             ${test_SRC_PATH}/ab_server/src/cpf.c
                             ${test_SRC_PATH}/ab_server/src/cpf.h
+                            ${test_SRC_PATH}/ab_server/src/debug.c
+                            ${test_SRC_PATH}/ab_server/src/debug.h
                             ${test_SRC_PATH}/ab_server/src/eip.c
                             ${test_SRC_PATH}/ab_server/src/eip.h
                             ${test_SRC_PATH}/ab_server/src/main.c
                             ${test_SRC_PATH}/ab_server/src/pccc.c
                             ${test_SRC_PATH}/ab_server/src/pccc.h
                             ${test_SRC_PATH}/ab_server/src/plc.h
+                            ${test_SRC_PATH}/ab_server/src/slice.c
+                            ${test_SRC_PATH}/ab_server/src/slice.h
                             ${test_SRC_PATH}/ab_server/src/socket.c
                             ${test_SRC_PATH}/ab_server/src/socket.h
                             ${test_SRC_PATH}/ab_server/src/tcp_server.c

@@ -39,21 +39,35 @@
 
 enum {
     BUF_OK,
-    BUF_ERR_UNSUPPORTED_FMT = 1,
-    BUF_ERR_INSUFFICIENT_DATA = 2,
     BUF_ERR_NULL_PTR,
+    BUF_ERR_UNSUPPORTED_FMT,
+    BUF_ERR_INSUFFICIENT_DATA,
 };
 
 #define BUF_STACK_DEPTH (8)
 
+
 typedef struct {
-    uint8_t *data;
-    uint8_t tos_index;
-    uint16_t capacity[BUF_STACK_DEPTH];
-    uint16_t start[BUF_STACK_DEPTH];
-    uint16_t end[BUF_STACK_DEPTH];
-    uint16_t cursor[BUF_STACK_DEPTH];
+    uint8_t *start;
+    uint8_t *end;
+} buf_stack_entry_t;
+
+
+typedef struct {
+    buf_stack_entry_t orig;
+    buf_stack_entry_t stack[BUF_STACK_DEPTH];
+    uint8_t tos;
 } buf_t;
+
+
+// typedef struct {
+//     uint8_t *data;
+//     uint8_t tos_index;
+//     uint16_t capacity[BUF_STACK_DEPTH];
+//     uint16_t start[BUF_STACK_DEPTH];
+//     uint16_t end[BUF_STACK_DEPTH];
+//     uint16_t cursor[BUF_STACK_DEPTH];
+// } buf_t;
 
 /*
 Invariants:
