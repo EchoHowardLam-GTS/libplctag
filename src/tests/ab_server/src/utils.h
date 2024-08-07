@@ -49,3 +49,16 @@ static inline bool ptr_before(void *ptr, void *end) {
 
     return false;
 }
+
+
+static inline bool is_hex(char c) {
+    bool rc = false;
+
+    if(c >= '0' && c <= '9') {
+        rc = true;
+    } else if((c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
+        rc = true;
+    }
+
+    return rc;
+}

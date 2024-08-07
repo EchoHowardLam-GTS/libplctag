@@ -43,13 +43,18 @@ typedef enum {
     SLICE_ERR_NULL_PTR,
     SLICE_ERR_TOO_LITTLE_DATA,
     SLICE_ERR_TOO_MUCH_DATA,
+    SLICE_ERR_TOO_LITTLE_SPACE,
     SLICE_ERR_UNSUPPORTED_FORMAT,
     SLICE_ERR_INCOMPLETE_FORMAT,
+    SLICE_ERR_INCORRECT_FORMAT,
+    SLICE_ERR_BAD_PARAM,
     SLICE_ERR_OUT_OF_BOUNDS,
+    SLICE_ERR_NOT_FOUND,
+    SLICE_ERR_OVERFLOW,
 } slice_status_t;
 
 
-typedef struct {
+typedef struct slice_t {
     uint8_t *start;
     uint8_t *end;
 } slice_t;
@@ -70,32 +75,34 @@ static inline slice_status_t slice_init(slice_p slice, uint8_t *start, uint8_t *
     return SLICE_ERR_NULL_PTR;
 }
 
-static inline slice_status_t slice_contains(slice_p slice, uint8_t *ptr)
+
+static inline bool slice_contains(slice_p slice, uint8_t *ptr)
 {
     if(slice && ptr) {
-        intptr_t start_int = (intptr_t)(slice->start);
-        intptr_t end_int = (intptr_t)(slice->end);
-        intptr_t ptr_int = (intptr_t)(ptr);
-
-        if(start_int <= ptr_int && ptr_int < end_int) {
-            return SLICE_STATUS_OK;
-        } else {
-            return SLICE_ERR_OUT_OF_BOUNDS;
+        if((uintptr_t)(slice->start) <= (uintptr_t)(ptr) && (uintptr_t)(ptr) < (uintptr_t)(slice->end)) {
+            return true;
         }
     }
 
-    return SLICE_ERR_NULL_PTR;
+    return false;
 }
 
 
 static inline uint32_t slice_len(slice_p slice)
 {
     if(slice && slice->start && slice->end) {
-        return (uint32_t)(slice->end - slice->start);
+        if((uintptr_t)(slice->end) >= (uintptr_t)(slice->start)) {
+            return (uint32_t)((uintptr_t)(slice->end) - (uintptr_t)(slice->start));
+        }
     }
 
-    return SLICE_ERR_NULL_PTR;
+    return 0;
 }
+
+extern slice_status_t slice_to_string(slice_p slice, char *result, uint32_t result_size, bool word_swap);
+extern slice_status_t string_to_slice(const char *source, slice_p dest, bool word_swap);
+
+extern slice_status_t slice_from_slice(slice_p parent, slice_p new_slice, uint8_t *start, uint8_t *end);
 
 
 /*
@@ -109,7 +116,7 @@ static inline uint32_t slice_len(slice_p slice)
  *
  * > - set encode/decode to big-endian.  No result.
  *
- * ~ - swap words, only for the next entry
+ * ~[b,w] - Swap bytes or words, only for the next field.
  *
  * ^ - save the pointer to the current position in the slice.
  *      pack: a pointer to a pointer to uint8_t.
@@ -132,25 +139,19 @@ static inline uint32_t slice_len(slice_p slice)
  *          pack: takes a pointer to a slice with valid (non-zero) start and end pointers.
  *                If the slice has more data than the count word can encode, pack returns
  *                SLICE_ERR_TOO_MUCH_DATA.
- *        unpack: takes a pointer to a slice. If the slice has non-null start and end, the
- *                slice is used to store the byte string.  The end pointer is adjusted to
- *                point to the end of the byte string.   If the slice has null start and
- *                end, memory for the byte string will be allocated and the slice will be
- *                updated to point to that memory.
+ *        unpack: takes a pointer to a slice.  The start and end are set to point to the
+ *                data of the counted string in the buffer.  If the count value is larger
+ *                than the number of bytes left in the unprocessed data
+ *                SLICE_ERR_TOO_LITTLE_DATA is returned.
  *
- *                If the slice does not contain enough space for the byte string data, the
- *                error SLICE_ERR_TOO_MUCH_DATA is returned.
  *
  * th - Value-terminated byte string.   The "h" is a pair of hex digits that denote the byte
  *      value on which to terminate.
  *        pack: takes a slice pointer. The slice contains the byte string. The data must contain
  *              the terminator byte as well.
- *      unpack: takes a slice pointer.  If start and end are non-null, the data is copied into
- *              the slice. The end pointer is adjusted to point to the end of the copied data.
- *              If there is insufficient space in the slice, unpack returns SLICE_ERR_TOO_MUCH_DATA.
- *              If start and end are null, memory is allocated for the byte string and the
- *              slice is updated to point to that memory. The terminator byte is included in the
- *              copied data.
+ *      unpack: takes a slice pointer.  takes a pointer to a slice.  The start and end are set to point to the
+ *              data of the terminated string in the buffer.  If the terminator is not found, then
+ *              SLICE_ERR_NOT_FOUND is returned.
  *
  * e[0,1] - EPATH byte string. The EPATH starts with a single byte count of the number of 16-bit
  *          words in the EPATH.  The EPATH can be padded (1) or unpadded (0). A padded EPATH will
@@ -158,12 +159,8 @@ static inline uint32_t slice_len(slice_p slice)
  *          pack: takes a pointer to a slice.  If the data in the slice is longer than 510 bytes
  *                pack returns SLICE_ERR_TOO_MUCH_DATA as the length cannot be represented in one
  *                byte. The count word and data in the slice are copied into the slicefer.
- *        unpack: takes a pointer to a slice. If the slice has non-null start and end the EPATH
- *                data, EXCLUDING THE COUNT BYTE, is copied into the slice.   If there is not
- *                enough space, the error SLICE_ERR_TOO_MUCH_DATA is returned.  If the slice start
- *                and end are null, memory is allocated for the EPATH data and the slice is set
- *                to point to it.  The data is copied into the newly allocated memory. The count
- *                byte is not copied.
+ *        unpack: takes a pointer to a slice. Behaves as for "c1" except the count is multiplied
+ *                by two to get the number of bytes (0-510).
  *
  */
 
