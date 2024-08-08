@@ -33,9 +33,50 @@
 
 #pragma once
 
-#include "utils/tcp_server.h"
-#include "plc.h"
-#include "utils/slice.h"
+#include <stdbool.h>
 
-extern int handle_cpf_unconnected(tcp_client_p client);
-extern int handle_cpf_connected(tcp_client_p client);
+
+#if defined(IS_WINDOWS)
+    #include <processthreadsapi.h>
+
+    #define THREAD_FUNC(name, arg) DWORD __stdcall name(LPVOID arg)
+    #define THREAD_RETURN(val) return (DWORD)(val)
+    typedef HANDLE thread_t;
+    typedef DWORD __stdcall (*thread_func_t)(LPVOID arg);
+    typedef LPVOID thread_arg_t;
+#else
+    #include <pthread.h>
+    #define THREAD_FUNC(name, arg) void *name(void *arg)
+    #define THREAD_RETURN(val) return (val)
+    typedef pthread_t thread_t;
+    typedef void *(*thread_func_t)(void *arg);
+    typedef void *thread_arg_t;
+#endif
+
+
+static inline bool thread_create(thread_t *t, thread_func_t func, thread_arg_t arg)
+{
+    bool rc = false;
+
+    *t = NULL;
+
+#if defined(IS_WINDOWS)
+    *t = CreateThread(NULL,           /* default security attributes */
+                    0,               /* use default stack size      */
+                    func,            /* thread function             */
+                    arg,             /* argument to thread function */
+                    (DWORD)0,        /* use default creation flags  */
+                    (LPDWORD)NULL);  /* do not need thread ID       */
+    /* detatch so that the thread is cleaned up on exit. */
+    if(*t) { CloseHandle(t); }
+    else { rc = true; }
+#else
+    if(!pthread_create(t, NULL, func, arg)) {
+        pthread_detach(*t);
+    } else {
+        rc = true;
+    }
+#endif
+
+    return rc;
+}

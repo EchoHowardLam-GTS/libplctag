@@ -1,5 +1,5 @@
 /***************************************************************************
- *   Copyright (C) 2020 by Kyle Hayes                                      *
+ *   Copyright (C) 2024 by Kyle Hayes                                      *
  *   Author Kyle Hayes  kyle.hayes@gmail.com                               *
  *                                                                         *
  * This software is available under either the Mozilla Public License      *
@@ -38,14 +38,15 @@
  * to allow compilation across POSIX and Windows systems.
  */
 
-#if defined(WIN32) || defined(WIN64) || defined(_WIN32) || defined(_WIN64)
-    #define IS_WINDOWS (1)
-#endif
+#ifndef SUPPRESS_WINDOWS
+    #if defined(WIN32) || defined(WIN64) || defined(_WIN32) || defined(_WIN64)
+        #define IS_WINDOWS (1)
+    #endif
 
-#if defined(_MSC_VER)
-    #define IS_MSVC (1)
+    #if defined(_MSC_VER)
+        #define IS_MSVC (1)
+    #endif
 #endif
-
 
 #ifdef IS_MSVC
     #define str_cmp_i(first, second) _stricmp(first, second)
@@ -63,124 +64,3 @@
 #else
     #include <sys/types.h>
 #endif
-
-
-
-
-#if defined(WIN32) || defined(_WIND32)
-    #include <processthreadsapi.h>
-
-    #define THREAD_FUNC(name, arg) DWORD __stdcall name(LPVOID arg)
-    #define THREAD_RETURN(val) return (DWORD)(val)
-    typedef HANDLE thread_t;
-    typedef DWORD __stdcall (*thread_func_t)(LPVOID arg);
-    typedef LPVOID thread_arg_t;
-
-#else
-    #include <pthread.h>
-    #define THREAD_FUNC(name, arg) void *name(void *arg)
-    #define THREAD_RETURN(val) return (val)
-    typedef pthread_t thread_t;
-    typedef void *(*thread_func_t)(void *arg);
-    typedef void *thread_arg_t;
-
-    typedef pthread_mutex_t mutex_t;
-
-#endif
-
-
-static inline int thread_create(thread_t *t, thread_func_t func, thread_arg_t arg)
-{
-    int rc = 0;
-
-#if defined(WIN32) || defined(_WIN32)
-    *t = CreateThread(NULL,           /* default security attributes */
-                    0,               /* use default stack size      */
-                    func,            /* thread function             */
-                    arg,             /* argument to thread function */
-                    (DWORD)0,        /* use default creation flags  */
-                    (LPDWORD)NULL);  /* do not need thread ID       */
-    /* detatch so that the thread is cleaned up on exit. */
-    if(*t) { CloseHandle(t); }
-    else { rc = 1; }
-#else
-    if(!pthread_create(t, NULL, func, arg)) {
-        pthread_detach(*t);
-    } else {
-        rc = 1;
-    }
-#endif
-
-    return rc;
-}
-
-
-static inline int mutex_create(mutex_t *mut)
-{
-    int rc = 0;
-
-#if defined(WIN32) || defined(_WIN32)
-    *mut = CreateMutex(NULL,                  /* default security attributes  */
-                     FALSE,                  /* initially not owned          */
-                     NULL);                  /* unnamed mutex                */
-    if(!*mut) { rc = 1; }
-#else
-    if(pthread_mutex_init(mut, NULL)) { rc = 1; }
-#endif
-
-    return rc;
-}
-
-
-static inline int mutex_lock(mutex_t *mut)
-{
-    int rc = 0;
-
-#if defined(WIN32) || defined(_WIN32)
-    DWORD dwWaitResult = ~WAIT_OBJECT_0;;
-
-    while(dwWaitResult != WAIT_OBJECT_0) {
-        dwWaitResult = WaitForSingleObject(mut, INFINITE);
-    }
-#else
-    if(pthread_mutex_lock(mut)) {
-        rc = 1;
-    }
-#endif
-
-    return rc;
-}
-
-
-static inline int mutex_unlock(mutex_t *mut)
-{
-    int rc = 0;
-
-#if defined(WIN32) || defined(_WIN32)
-    if(!ReleaseMutex(mut)) {
-        rc = 1;
-    }
-#else
-    if(pthread_mutex_unlock(mut)) {
-        rc = 1;
-    }
-#endif
-
-    return rc;
-}
-
-
-static inline int mutex_destroy(mutex_t *mut)
-{
-    int rc = 0;
-
-#if defined(WIN32) || defined(_WIN32)
-    CloseHandle(mut);
-#else
-    if(pthread_mutex_destroy(mut)) {
-        rc = 1;
-    }
-#endif
-
-    return rc;
-}

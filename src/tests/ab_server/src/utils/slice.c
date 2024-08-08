@@ -1,5 +1,5 @@
 /***************************************************************************
- *   Copyright (C) 2020 by Kyle Hayes                                      *
+ *   Copyright (C) 2024 by Kyle Hayes                                      *
  *   Author Kyle Hayes  kyle.hayes@gmail.com                               *
  *                                                                         *
  * This software is available under either the Mozilla Public License      *
@@ -37,8 +37,8 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <string.h>
-#include "debug.h"
-#include "slice.h"
+#include "utils/debug.h"
+#include "utils/slice.h"
 #include "util.h"
 
 

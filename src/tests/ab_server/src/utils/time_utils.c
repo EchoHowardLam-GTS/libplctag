@@ -1,5 +1,5 @@
 /***************************************************************************
- *   Copyright (C) 2020 by Kyle Hayes                                      *
+ *   Copyright (C) 2024 by Kyle Hayes                                      *
  *   Author Kyle Hayes  kyle.hayes@gmail.com                               *
  *                                                                         *
  * This software is available under either the Mozilla Public License      *
@@ -50,14 +50,14 @@
     /* assume it is POSIX of some sort... */
     #include <sys/time.h>
     #include <sys/types.h>
-    #include <sys/socket.h>
+    #include <sys/utils/socket.h>
     #include <netinet/in.h>
     #include <arpa/inet.h>
     #include <unistd.h>
     #include <netdb.h>
 #endif
 
-#include "utils.h"
+#include "utils/time_utils.h"
 
 
 /*
@@ -191,7 +191,7 @@ void info_impl(const char *func, int line, const char *templ, ...)
 
 #define COLUMNS (size_t)(16)
 
-void buf_dump(buf_t *buf)
+void buf_dump(slice_p buf)
 {
     size_t max_row, row, column;
     char row_buf[300]; /* MAGIC */

@@ -1,5 +1,5 @@
 /***************************************************************************
- *   Copyright (C) 2020 by Kyle Hayes                                      *
+ *   Copyright (C) 2024 by Kyle Hayes                                      *
  *   Author Kyle Hayes  kyle.hayes@gmail.com                               *
  *                                                                         *
  * This software is available under either the Mozilla Public License      *
@@ -34,8 +34,8 @@
 #pragma once
 
 #include "plc.h"
-#include "buf.h"
-#include "tcp_server.h"
+#include "utils/slice.h"
+#include "utils/tcp_server.h"
 
 enum {
     PCCC_OK = 0,

@@ -571,41 +571,43 @@ elseif (BUILD_EXAMPLES)
 
     # build the simulator for testing.
     # if(UNIX)
-    set(AB_SERVER_FILES     ${test_SRC_PATH}/ab_server/src/cip.c
-                            ${test_SRC_PATH}/ab_server/src/cip.h
-                            ${test_SRC_PATH}/ab_server/src/compat.h
-                            ${test_SRC_PATH}/ab_server/src/cpf.c
-                            ${test_SRC_PATH}/ab_server/src/cpf.h
-                            ${test_SRC_PATH}/ab_server/src/debug.c
-                            ${test_SRC_PATH}/ab_server/src/debug.h
-                            ${test_SRC_PATH}/ab_server/src/eip.c
-                            ${test_SRC_PATH}/ab_server/src/eip.h
-                            ${test_SRC_PATH}/ab_server/src/main.c
-                            ${test_SRC_PATH}/ab_server/src/pccc.c
-                            ${test_SRC_PATH}/ab_server/src/pccc.h
-                            ${test_SRC_PATH}/ab_server/src/plc.h
-                            ${test_SRC_PATH}/ab_server/src/slice.c
-                            ${test_SRC_PATH}/ab_server/src/slice.h
-                            ${test_SRC_PATH}/ab_server/src/socket.c
-                            ${test_SRC_PATH}/ab_server/src/socket.h
-                            ${test_SRC_PATH}/ab_server/src/tcp_server.c
-                            ${test_SRC_PATH}/ab_server/src/tcp_server.h
-                            ${test_SRC_PATH}/ab_server/src/utils.c
-                            ${test_SRC_PATH}/ab_server/src/utils.h
-        )
+    # set(AB_SERVER_FILES     ${test_SRC_PATH}/ab_server/src/cip.c
+    #                         ${test_SRC_PATH}/ab_server/src/cip.h
+    #                         ${test_SRC_PATH}/ab_server/src/compat.h
+    #                         ${test_SRC_PATH}/ab_server/src/cpf.c
+    #                         ${test_SRC_PATH}/ab_server/src/cpf.h
+    #                         ${test_SRC_PATH}/ab_server/src/debug.c
+    #                         ${test_SRC_PATH}/ab_server/src/debug.h
+    #                         ${test_SRC_PATH}/ab_server/src/eip.c
+    #                         ${test_SRC_PATH}/ab_server/src/eip.h
+    #                         ${test_SRC_PATH}/ab_server/src/main.c
+    #                         ${test_SRC_PATH}/ab_server/src/pccc.c
+    #                         ${test_SRC_PATH}/ab_server/src/pccc.h
+    #                         ${test_SRC_PATH}/ab_server/src/plc.h
+    #                         ${test_SRC_PATH}/ab_server/src/slice.c
+    #                         ${test_SRC_PATH}/ab_server/src/slice.h
+    #                         ${test_SRC_PATH}/ab_server/src/socket.c
+    #                         ${test_SRC_PATH}/ab_server/src/socket.h
+    #                         ${test_SRC_PATH}/ab_server/src/tcp_server.c
+    #                         ${test_SRC_PATH}/ab_server/src/tcp_server.h
+    #                         ${test_SRC_PATH}/ab_server/src/utils.c
+    #                         ${test_SRC_PATH}/ab_server/src/utils.h
+    #     )
 
-        foreach(AB_SERVER_FILE ${AB_SERVER_FILES})
-            set_source_files_properties("${AB_SERVER_FILE}" PROPERTIES COMPILE_FLAGS "${C99_FLAGS} ${BASE_C_FLAGS} ${C11_CHECK}" )
-        endforeach()
+    #     foreach(AB_SERVER_FILE ${AB_SERVER_FILES})
+    #         set_source_files_properties("${AB_SERVER_FILE}" PROPERTIES COMPILE_FLAGS "${C99_FLAGS} ${BASE_C_FLAGS} ${C11_CHECK}" )
+    #     endforeach()
 
-        add_executable(ab_server ${AB_SERVER_FILES})
+    #     add_executable(ab_server ${AB_SERVER_FILES})
 
-        target_link_libraries(ab_server ${example_LIBRARIES} )
+    #     target_link_libraries(ab_server ${example_LIBRARIES} )
 
-        if(BASE_LINK_FLAGS)
-            set_target_properties(ab_server PROPERTIES LINK_FLAGS "${BASE_LINK_FLAGS}")
-        endif()
+    #     if(BASE_LINK_FLAGS)
+    #         set_target_properties(ab_server PROPERTIES LINK_FLAGS "${BASE_LINK_FLAGS}")
+    #     endif()
     # endif()
+
+    add_subdirectory(src/tests/ab_server)
 
     # build the cli.
     set(CLI_FILES ${cli_SRC_PATH}/cli.c

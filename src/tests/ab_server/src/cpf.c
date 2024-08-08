@@ -1,5 +1,5 @@
 /***************************************************************************
- *   Copyright (C) 2020 by Kyle Hayes                                      *
+ *   Copyright (C) 2024 by Kyle Hayes                                      *
  *   Author Kyle Hayes  kyle.hayes@gmail.com                               *
  *                                                                         *
  * This software is available under either the Mozilla Public License      *
@@ -34,8 +34,9 @@
 #include <stdint.h>
 #include "cip.h"
 #include "cpf.h"
+#include "utils/debug.h"
 #include "eip.h"
-#include "utils.h"
+#include "utils/time_utils.h"
 
 #define CPF_ITEM_NAI ((uint16_t)0x0000) /* NULL Address Item */
 #define CPF_ITEM_CAI ((uint16_t)0x00A1) /* connected address item */
@@ -75,8 +76,8 @@ typedef struct {
 int handle_cpf_connected(tcp_client_p client)
 {
     int rc;
-    buf_t *request = &(client->request);
-    buf_t *response = &(client->response);
+    slice_p request = &(client->request);
+    slice_p response = &(client->response);
     uint16_t cpf_start_offset = 0;
     uint16_t cip_start_offset = 0;
     cpf_co_header_s header;
@@ -183,8 +184,8 @@ int handle_cpf_connected(tcp_client_p client)
 int handle_cpf_unconnected(tcp_client_p client)
 {
     int rc;
-    buf_t *request = &(client->request);
-    buf_t *response = &(client->response);
+    slice_p request = &(client->request);
+    slice_p response = &(client->response);
     uint16_t cpf_start_offset = 0;
     uint16_t cip_start_offset = 0;
     cpf_uc_header_s header;

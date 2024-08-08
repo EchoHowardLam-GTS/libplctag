@@ -1,5 +1,5 @@
 /***************************************************************************
- *   Copyright (C) 2020 by Kyle Hayes                                      *
+ *   Copyright (C) 2024 by Kyle Hayes                                      *
  *   Author Kyle Hayes  kyle.hayes@gmail.com                               *
  *                                                                         *
  * This software is available under either the Mozilla Public License      *
@@ -33,24 +33,34 @@
 
 #pragma once
 
-#include "buf.h"
+#include <signal.h>
+#include "slice.h"
+#include "socket.h"
+
 
 typedef enum {
-    SOCKET_STATUS_OK    = -1,
-    SOCKET_ERR_STARTUP  = -2,
-    SOCKET_ERR_OPEN     = -3,
-    SOCKET_ERR_CREATE   = -4,
-    SOCKET_ERR_BIND     = -5,
-    SOCKET_ERR_LISTEN   = -6,
-    SOCKET_ERR_SETOPT   = -7,
-    SOCKET_ERR_READ     = -8,
-    SOCKET_ERR_WRITE    = -9,
-    SOCKET_ERR_SELECT   = -10,
-    SOCKET_ERR_ACCEPT   = -11
-} socket_err_t;
+    TCP_CLIENT_INCOMPLETE = 1001,
+    TCP_CLIENT_PROCESSED = 1002,
+    TCP_CLIENT_DONE = 1003,
+    TCP_CLIENT_BAD_REQUEST = 1004,
+    TCP_CLIENT_UNSUPPORTED = 1005,
+} tcp_client_status_t;
 
-extern int socket_open(const char *host, const char *port);
-extern void socket_close(int sock);
-extern int socket_accept(int sock);
-extern int socket_read(int sock, buf_t *in_buf);
-extern int socket_write(int sock, buf_t *out_buf);
+
+typedef struct tcp_client *(*tcp_client_allocate_func)(void *app_data);
+typedef tcp_client_status_t (*tcp_client_handler_func)(slice_p request, slice_p response, struct tcp_client *client);
+
+typedef struct tcp_client {
+    SOCKET sock_fd;
+
+    /* filled in by the application's allocator function */
+    tcp_client_handler_func handler;
+    volatile sig_atomic_t *terminate; /* need this in the thread and main loop */
+
+    /* data buffer for requests and responses */
+    slice_t buffer;
+} tcp_client_t;
+
+typedef tcp_client_t *tcp_client_p;
+
+extern void tcp_server_run(const char *host, const char *port, volatile sig_atomic_t *terminate, tcp_client_allocate_func allocator, void *app_data);

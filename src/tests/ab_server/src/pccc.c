@@ -1,5 +1,5 @@
 /***************************************************************************
- *   Copyright (C) 2020 by Kyle Hayes                                      *
+ *   Copyright (C) 2024 by Kyle Hayes                                      *
  *   Author Kyle Hayes  kyle.hayes@gmail.com                               *
  *                                                                         *
  * This software is available under either the Mozilla Public License      *
@@ -35,11 +35,12 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include "cip.h"
+#include "utils/debug.h"
 #include "eip.h"
 #include "pccc.h"
 #include "plc.h"
-#include "buf.h"
-#include "utils.h"
+#include "utils/slice.h"
+#include "utils/time_utils.h"
 
 const uint8_t PCCC_PREFIX[] = { 0x0f, 0x00 };
 const uint8_t PLC5_READ[] = { 0x01 };
@@ -61,11 +62,11 @@ static int handle_slc_write_request(tcp_client_p client);
 static int make_pccc_error(tcp_client_p client, uint8_t err_code);
 
 
-int dispatch_pccc_request(tcp_client_p client)
+int dispatch_pccc_request(tcp_client_p client_arg)
 {
     int rc = PCCC_OK;
-    buf_t *request = &(client->request);
-    buf_t *response = &(client->response);
+    slice_p request = &(client->request);
+    slice_p response = &(client->response);
     uint16_t response_start_offset = 0;
     uint16_t pccc_request_size = 0;
     // uint16_t response_prefix_offset = 0;
@@ -91,7 +92,7 @@ int dispatch_pccc_request(tcp_client_p client)
         // response_prefix_offset = buf_get_cursor(response);
 
         if(buf_match_bytes(request, PCCC_PREFIX, sizeof(PCCC_PREFIX))) {
-            buf_t pccc_command;
+            slice_t pccc_command;
 
             info("Matched valid PCCC prefix.");
 
@@ -145,8 +146,8 @@ int dispatch_pccc_request(tcp_client_p client)
 int handle_plc5_read_request(tcp_client_p client)
 {
     int rc = PCCC_OK;
-    buf_t *request = &(client->request);
-    buf_t *response = &(client->response);
+    slice_p request = &(client->request);
+    slice_p response = &(client->response);
     uint16_t offset = 0;
     size_t start_byte_offset = 0;
     uint16_t transfer_size = 0;
@@ -242,8 +243,8 @@ int handle_plc5_read_request(tcp_client_p client)
 int handle_plc5_write_request(tcp_client_p client)
 {
     int rc = PCCC_OK;
-    buf_t *request = &(client->request);
-    buf_t *response = &(client->response);
+    slice_p request = &(client->request);
+    slice_p response = &(client->response);
     uint16_t offset = 0;
     size_t start_byte_offset = 0;
     uint16_t transfer_size = 0;
@@ -347,8 +348,8 @@ int handle_plc5_write_request(tcp_client_p client)
 int handle_slc_read_request(tcp_client_p client)
 {
     int rc = PCCC_OK;
-    buf_t *request = &(client->request);
-    buf_t *response = &(client->response);
+    slice_p request = &(client->request);
+    slice_p response = &(client->response);
     size_t start_byte_offset = 0;
     uint8_t transfer_size = 0;
     size_t end_byte_offset = 0;
@@ -462,8 +463,8 @@ int handle_slc_read_request(tcp_client_p client)
 int handle_slc_write_request(tcp_client_p client)
 {
     int rc = PCCC_OK;
-    buf_t *request = &(client->request);
-    buf_t *response = &(client->response);
+    slice_p request = &(client->request);
+    slice_p response = &(client->response);
     size_t start_byte_offset = 0;
     uint8_t transfer_size = 0;
     size_t end_byte_offset = 0;
@@ -591,7 +592,7 @@ int handle_slc_write_request(tcp_client_p client)
 
 int make_pccc_error(tcp_client_p client, uint8_t err_code)
 {
-    buf_t *response = &(client->response);
+    slice_p response = &(client->response);
 
     // 4f f0 3c 96 06
 

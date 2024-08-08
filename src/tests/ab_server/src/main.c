@@ -1,5 +1,5 @@
 /***************************************************************************
- *   Copyright (C) 2020 by Kyle Hayes                                      *
+ *   Copyright (C) 2024 by Kyle Hayes                                      *
  *   Author Kyle Hayes  kyle.hayes@gmail.com                               *
  *                                                                         *
  * This software is available under either the Mozilla Public License      *
@@ -31,7 +31,7 @@
  *   59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.             *
  ***************************************************************************/
 
-#include "compat.h"
+#include "utils/compat.h"
 
 #include <stdbool.h>
 #include <stdio.h>
@@ -48,17 +48,29 @@
 #include <strings.h>
 #endif
 
+#include "utils/debug.h"
 #include "eip.h"
 #include "plc.h"
-#include "buf.h"
-#include "tcp_server.h"
-#include "utils.h"
+#include "utils/slice.h"
+#include "utils/tcp_server.h"
+#include "utils/time_utils.h"
+
+/*
+ * build on plc_connection_config
+ */
+typedef struct {
+    tcp_client_t;
+    struct plc_connection_config conn_config;
+    plc_s *plc;
+} client_state_t;
+
+typedef client_state_t *client_state_p;
 
 static void usage(void);
-static void process_args(int argc, const char **argv, plc_s *plc);
-static void parse_path(const char *path, plc_s *plc);
-static void parse_pccc_tag(const char *tag, plc_s *plc);
-static void parse_cip_tag(const char *tag, plc_s *plc);
+// static void process_args(int argc, const char **argv, plc_s *plc);
+// static void parse_path(const char *path, plc_s *plc);
+// static void parse_pccc_tag(const char *tag, plc_s *plc);
+// static void parse_cip_tag(const char *tag, plc_s *plc);
 static int request_handler(tcp_client_p client);
 
 
@@ -151,7 +163,7 @@ int main(int argc, const char **argv)
     /* set up handler for ^C etc. */
     setup_break_handler();
 
-    debug_off();
+    debug_set_level(DEBUG_INFO);
 
     /* clear out context to make sure we do not get gremlins */
     memset(&plc, 0, sizeof(plc));
@@ -208,526 +220,36 @@ void usage(void)
 }
 
 
-void process_args(int argc, const char **argv, plc_s *plc)
+tcp_client_p allocate_client(void *plc_arg)
 {
-    bool has_path = false;
-    bool needs_path = false;
-    bool has_plc = false;
-    bool has_tag = false;
+    plc_s *plc = (plc_s *)plc_arg;
+    client_state_p client = NULL;
 
-    /* make sure that the reject FO count is zero. */
-    plc->default_conn_config.reject_fo_count = 0;
+    size_t client_state_size = sizeof(*client) + plc->default_conn_config.default_buffer_size;
 
-    for(int i=0; i < argc; i++) {
-        if(strncmp(argv[i],"--plc=",6) == 0) {
-            if(has_plc) {
-                fprintf(stderr, "PLC type can only be specified once!\n");
-                usage();
-            }
+    client = calloc(1, client_state_size);
 
-            if(str_cmp_i(&(argv[i][6]), "ControlLogix") == 0) {
-                fprintf(stderr, "Selecting ControlLogix simulator.\n");
-                plc->plc_type = PLC_CONTROL_LOGIX;
-                plc->path[0] = (uint8_t)0x00; /* filled in later. */
-                plc->path[1] = (uint8_t)0x00; /* filled in later. */
-                plc->path[2] = (uint8_t)0x20;
-                plc->path[3] = (uint8_t)0x02;
-                plc->path[4] = (uint8_t)0x24;
-                plc->path[5] = (uint8_t)0x01;
-                plc->path_len = 6;
-                plc->default_conn_config.client_to_server_max_packet = 504;
-                plc->default_conn_config.server_to_client_max_packet = 504;
-                needs_path = true;
-                has_plc = true;
-            } else if(str_cmp_i(&(argv[i][6]), "Micro800") == 0) {
-                fprintf(stderr, "Selecting Micro8xx simulator.\n");
-                plc->plc_type = PLC_MICRO800;
-                plc->path[0] = (uint8_t)0x20;
-                plc->path[1] = (uint8_t)0x02;
-                plc->path[2] = (uint8_t)0x24;
-                plc->path[3] = (uint8_t)0x01;
-                plc->path_len = 4;
-                plc->default_conn_config.client_to_server_max_packet = 504;
-                plc->default_conn_config.server_to_client_max_packet = 504;
-                needs_path = false;
-                has_plc = true;
-            } else if(str_cmp_i(&(argv[i][6]), "Omron") == 0) {
-                fprintf(stderr, "Selecting Omron NJ/NX simulator.\n");
-                plc->plc_type = PLC_OMRON;
-                plc->path[0] = (uint8_t)0x12;  /* Extended segment, port A */
-                plc->path[1] = (uint8_t)0x09;  /* 9 bytes length. */
-                plc->path[2] = (uint8_t)0x31;  /* '1' */
-                plc->path[3] = (uint8_t)0x32;  /* '2' */
-                plc->path[4] = (uint8_t)0x37;  /* '7' */
-                plc->path[5] = (uint8_t)0x2e;  /* '.' */
-                plc->path[6] = (uint8_t)0x30;  /* '0' */
-                plc->path[7] = (uint8_t)0x2e;  /* '.' */
-                plc->path[8] = (uint8_t)0x30;  /* '0' */
-                plc->path[9] = (uint8_t)0x2e;  /* '.' */
-                plc->path[10] = (uint8_t)0x31; /* '1' */
-                plc->path[11] = (uint8_t)0x00; /* padding */
-                plc->path[12] = (uint8_t)0x20;
-                plc->path[13] = (uint8_t)0x02;
-                plc->path[14] = (uint8_t)0x24;
-                plc->path[15] = (uint8_t)0x01;
-                plc->path_len = 16;
-                plc->default_conn_config.client_to_server_max_packet = 504;
-                plc->default_conn_config.server_to_client_max_packet = 504;
-                needs_path = false;
-                has_plc = true;
-            } else if(str_cmp_i(&(argv[i][6]), "PLC/5") == 0) {
-                fprintf(stderr, "Selecting PLC/5 simulator.\n");
-                plc->plc_type = PLC_PLC5;
-                plc->path[0] = (uint8_t)0x20;
-                plc->path[1] = (uint8_t)0x02;
-                plc->path[2] = (uint8_t)0x24;
-                plc->path[3] = (uint8_t)0x01;
-                plc->path_len = 4;
-                plc->default_conn_config.client_to_server_max_packet = 244;
-                plc->default_conn_config.server_to_client_max_packet = 244;
-                needs_path = false;
-                has_plc = true;
-            } else if(str_cmp_i(&(argv[i][6]), "SLC500") == 0) {
-                fprintf(stderr, "Selecting SLC 500 simulator.\n");
-                plc->plc_type = PLC_SLC;
-                plc->path[0] = (uint8_t)0x20;
-                plc->path[1] = (uint8_t)0x02;
-                plc->path[2] = (uint8_t)0x24;
-                plc->path[3] = (uint8_t)0x01;
-                plc->path_len = 4;
-                plc->default_conn_config.client_to_server_max_packet = 244;
-                plc->default_conn_config.server_to_client_max_packet = 244;
-                needs_path = false;
-                has_plc = true;
-            } else if(str_cmp_i(&(argv[i][6]), "Micrologix") == 0) {
-                fprintf(stderr, "Selecting Micrologix simulator.\n");
-                plc->plc_type = PLC_MICROLOGIX;
-                plc->path[0] = (uint8_t)0x20;
-                plc->path[1] = (uint8_t)0x02;
-                plc->path[2] = (uint8_t)0x24;
-                plc->path[3] = (uint8_t)0x01;
-                plc->path_len = 4;
-                plc->default_conn_config.client_to_server_max_packet = 244;
-                plc->default_conn_config.server_to_client_max_packet = 244;
-                needs_path = false;
-                has_plc = true;
-            } else {
-                fprintf(stderr, "Unsupported PLC type %s!\n", &(argv[i][6]));
-                usage();
-            }
-        }
+    error_assert((client), "Unable to allocate new client state!");
 
-        if(strncmp(argv[i],"--path=",7) == 0) {
-            parse_path(&(argv[i][7]), plc);
-            has_path = true;
-        }
+    client->buffer.start = (uint8_t *)(client + 1);
+    client->buffer.end = client->buffer.start + plc->default_conn_config.default_buffer_size;
+    client->handler = request_handler;
+    client->conn_config = plc->default_conn_config;
+    client->plc = plc;
 
-        if(strncmp(argv[i],"--port=",7) == 0) {
-            plc->port_str = &(argv[i][7]);
-        }
 
-        if(strncmp(argv[i],"--tag=",6) == 0) {
-            if(plc && (plc->plc_type == PLC_PLC5 || plc->plc_type == PLC_SLC || plc->plc_type == PLC_MICROLOGIX)) {
-                parse_pccc_tag(&(argv[i][6]), plc);
-            } else {
-                parse_cip_tag(&(argv[i][6]), plc);
-            }
-            has_tag = true;
-        }
-
-        if(strcmp(argv[i],"--debug") == 0) {
-            debug_on();
-        }
-
-        if(strncmp(argv[i],"--reject_fo=", 12) == 0) {
-            if(plc) {
-                info("Setting reject ForwardOpen count to %d.", atoi(&argv[i][12]));
-                plc->default_conn_config.reject_fo_count = atoi(&argv[i][12]);
-            }
-        }
-
-        if(strncmp(argv[i],"--delay=", 8) == 0) {
-            if(plc) {
-                info("Setting response delay to %dms.", atoi(&argv[i][8]));
-                plc->default_conn_config.response_delay = atoi(&argv[i][8]);
-            }
-        }
-    }
-
-    if(needs_path && !has_path) {
-        fprintf(stderr, "This PLC type requires a path argument.\n");
-        usage();
-    }
-
-    if(!has_plc) {
-        fprintf(stderr, "You must pass a --plc= argument!\n");
-        usage();
-    }
-
-    if(!has_tag) {
-        fprintf(stderr, "You must define at least one tag.\n");
-        usage();
-    }
+    return client;
 }
-
-
-void parse_path(const char *path_str, plc_s *plc)
-{
-    int tmp_path[2];
-
-    if (str_scanf(path_str, "%d,%d", &tmp_path[0], &tmp_path[1]) == 2) {
-        plc->path[0] = (uint8_t)tmp_path[0];
-        plc->path[1] = (uint8_t)tmp_path[1];
-
-        info("Processed path %d,%d.", plc->path[0], plc->path[1]);
-    } else {
-        fprintf(stderr, "Error processing path \"%s\"!  Path must be two numbers separated by a comma.\n", path_str);
-        usage();
-    }
-}
-
-
-
-
-/*
- * PCCC tags are in the format:
- *    <data file>[<size>]
- *
- * Where data file is one of the following:
- *     N7 - 2 byte signed integer.  Requires size.
- *     F8 - 4-byte floating point number.   Requires size.
- *     ST18 - 82-byte string with 2-byte count word.
- *     L19 - 4 byte signed integer.   Requires size.
- *
- * The size field is a single positive integer.
- */
-
-void parse_pccc_tag(const char *tag_str, plc_s *plc)
-{
-    tag_def_s *tag = calloc(1, sizeof(*tag));
-    char data_file_name[200] = { 0 };
-    char size_str[200] = { 0 };
-    int num_dims = 0;
-    size_t start = 0;
-    size_t len = 0;
-
-    info("Starting.");
-
-    if(!tag) {
-        error("Unable to allocate memory for new tag!");
-    }
-
-    mutex_create(&(tag->mutex));
-
-    /* try to match the two parts of a tag definition string. */
-
-    info("Match data file.");
-
-    /* first match the data file. */
-    start = 0;
-    len = strspn(tag_str + start, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789");
-    if (!len) {
-        fprintf(stderr, "Unable to parse tag definition string, cannot find tag name in \"%s\"!\n", tag_str);
-        usage();
-    } else {
-        /* copy the string. */
-        for (size_t i = 0; i < len && i < (size_t)200; i++) {
-            data_file_name[i] = tag_str[start + i];
-        }
-
-        /* check data file for a match. */
-        if(str_cmp_i(data_file_name, "N7") == 0) {
-            info("Found N7 data file.");
-            tag->tag_type = TAG_PCCC_TYPE_INT;
-            tag->elem_size = 2;
-            tag->data_file_num = 7;
-        } else if(str_cmp_i(data_file_name, "F8") == 0) {
-            info("Found F8 data file.");
-            tag->tag_type = TAG_PCCC_TYPE_REAL;
-            tag->elem_size = 4;
-            tag->data_file_num = 8;
-        } else if(str_cmp_i(data_file_name, "ST18") == 0) {
-            info("Found ST18 data file.");
-            tag->tag_type = TAG_PCCC_TYPE_STRING;
-            tag->elem_size = 84;
-            tag->data_file_num = 18;
-        } else if(str_cmp_i(data_file_name, "L19") == 0) {
-            info("Found L19 data file.");
-            tag->tag_type = TAG_PCCC_TYPE_DINT;
-            tag->elem_size = 4;
-            tag->data_file_num = 19;
-        } else {
-            fprintf(stderr, "Unknown data file %s, unable to create tag!", data_file_name);
-            usage();
-        }
-
-        start += len;
-    }
-
-    /* get the array size delimiter. */
-    if (tag_str[start] != '[') {
-        fprintf(stderr, "Unable to parse tag definition string, cannot find starting square bracket after data file in \"%s\"!\n", tag_str);
-        usage();
-    } else {
-        start++;
-    }
-
-    /* get the size field */
-    len = strspn(tag_str + start, "0123456789");
-    if (!len) {
-        fprintf(stderr, "Unable to parse tag definition string, cannot match array size in \"%s\"!\n", tag_str);
-        usage();
-    } else {
-        /* copy the string. */
-        for (size_t i = 0; i < len && i < (size_t)200; i++) {
-            size_str[i] = tag_str[start + i];
-        }
-
-        start += len;
-    }
-
-    if (tag_str[start] != ']') {
-        fprintf(stderr, "Unable to parse tag definition string, cannot find ending square bracket after size in \"%s\"!\n", tag_str);
-        usage();
-    }
-
-    /* make sure all the dimensions are defaulted to something sane. */
-    tag->dimensions[0] = 1;
-    tag->dimensions[1] = 1;
-    tag->dimensions[2] = 1;
-
-    /* match the size. */
-    num_dims = str_scanf(size_str, "%zu", &tag->dimensions[0]);
-    if(num_dims != 1) {
-        fprintf(stderr, "Unable to parse tag size in \"%s\"!\n", tag_str);
-        usage();
-    }
-
-    /* check the size. */
-    if(tag->dimensions[0] <= 0) {
-        fprintf(stderr, "The array size must least 1 and may not be negative!\n");
-        usage();
-    } else {
-        tag->elem_count = tag->dimensions[0];
-        tag->num_dimensions = 1;
-    }
-
-    /* copy the tag name */
-    tag->name = strdup(data_file_name);
-    if (!tag->name) {
-        fprintf(stderr, "Unable to allocate a copy of the data file \"%s\"!\n", data_file_name);
-        usage();
-    }
-
-    /* allocate the tag data array. */
-    info("allocating %d elements of %d bytes each.", tag->elem_count, tag->elem_size);
-    tag->data = calloc(tag->elem_count, (size_t)tag->elem_size);
-    if(!tag->data) {
-        fprintf(stderr, "Unable to allocate tag data buffer!\n");
-        free(tag->name);
-    }
-
-    info("Processed \"%s\" into tag %s of type %x with dimensions (%d, %d, %d).", tag_str, tag->name, tag->tag_type, tag->dimensions[0], tag->dimensions[1], tag->dimensions[2]);
-
-    /* add the tag to the list. */
-    tag->next_tag = plc->tags;
-    plc->tags = tag;
-}
-
-
-
-
-/*
- * CIP tags are in the format:
- *    <name>:<type>[<sizes>]
- *
- * Where name is alphanumeric, starting with an alpha character.
- *
- * Type is one of:
- *     INT - 2-byte signed integer.  Requires array size(s).
- *     DINT - 4-byte signed integer.  Requires array size(s).
- *     LINT - 8-byte signed integer.  Requires array size(s).
- *     REAL - 4-byte floating point number.  Requires array size(s).
- *     LREAL - 8-byte floating point number.  Requires array size(s).
- *     STRING - 82-byte string with 4-byte count word and 2 bytes of padding.
- *     BOOL - single bit returned as a byte.
- *
- * Array size field is one or more (up to 3) numbers separated by commas.
- */
-
-void parse_cip_tag(const char *tag_str, plc_s *plc)
-{
-    tag_def_s *tag = calloc(1, sizeof(*tag));
-    char tag_name[200] = { 0 };
-    char type_str[200] = { 0 };
-    char dim_str[200] = { 0 };
-    int num_dims = 0;
-    size_t start = 0;
-    size_t len = 0;
-
-    if(!tag) {
-        error("Unable to allocate memory for new tag!");
-    }
-
-    /* try to match the three parts of a tag definition string. */
-
-    /* first match the name. */
-    start = 0;
-    len = strspn(tag_str + start, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_");
-    if (!len) {
-        fprintf(stderr, "Unable to parse tag definition string, cannot find tag name in \"%s\"!\n", tag_str);
-        usage();
-    } else {
-        /* copy the string. */
-        for (size_t i = 0; i < len && i < (size_t)200; i++) {
-            tag_name[i] = tag_str[start + i];
-        }
-
-        start += len;
-    }
-
-    if(tag_str[start] != ':') {
-        fprintf(stderr, "Unable to parse tag definition string, cannot find colon after tag name in \"%s\"!\n", tag_str);
-        usage();
-    } else {
-        start++;
-    }
-
-    /* get the type field */
-    len = strspn(tag_str + start, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ");
-    if (!len) {
-        fprintf(stderr, "Unable to parse tag definition string, cannot match tag type in \"%s\"!\n", tag_str);
-        usage();
-    } else {
-        /* copy the string. */
-        for (size_t i = 0; i < len && i < (size_t)200; i++) {
-            type_str[i] = tag_str[start + i];
-        }
-
-        start += len;
-    }
-
-    if (tag_str[start] != '[') {
-        fprintf(stderr, "Unable to parse tag definition string, cannot find starting square bracket after tag type in \"%s\"!\n", tag_str);
-        usage();
-    } else {
-        start++;
-    }
-
-    /* get the dimension field */
-    len = strspn(tag_str + start, "0123456789,");
-    if (!len) {
-        fprintf(stderr, "Unable to parse tag definition string, cannot match dimension in \"%s\"!\n", tag_str);
-        usage();
-    } else {
-        /* copy the string. */
-        for (size_t i = 0; i < len && i < (size_t)200; i++) {
-            dim_str[i] = tag_str[start + i];
-        }
-
-        start += len;
-    }
-
-    if (tag_str[start] != ']') {
-        fprintf(stderr, "Unable to parse tag definition string, cannot find ending square bracket after tag type in \"%s\"!\n", tag_str);
-        usage();
-    }
-
-    /* match the type. */
-    if(str_cmp_i(type_str, "SINT") == 0) {
-        tag->tag_type = TAG_CIP_TYPE_SINT;
-        tag->elem_size = 1;
-    } else if(str_cmp_i(type_str, "INT") == 0) {
-        tag->tag_type = TAG_CIP_TYPE_INT;
-        tag->elem_size = 2;
-    } else if(str_cmp_i(type_str, "DINT") == 0) {
-        tag->tag_type = TAG_CIP_TYPE_DINT;
-        tag->elem_size = 4;
-    } else if(str_cmp_i(type_str, "LINT") == 0) {
-        tag->tag_type = TAG_CIP_TYPE_LINT;
-        tag->elem_size = 8;
-    } else if(str_cmp_i(type_str, "REAL") == 0) {
-        tag->tag_type = TAG_CIP_TYPE_REAL;
-        tag->elem_size = 4;
-    } else if(str_cmp_i(type_str, "LREAL") == 0) {
-        tag->tag_type = TAG_CIP_TYPE_LREAL;
-        tag->elem_size = 8;
-    } else if(str_cmp_i(type_str, "STRING") == 0) {
-        tag->tag_type = TAG_CIP_TYPE_STRING;
-        tag->elem_size = 88;
-    } else if(str_cmp_i(type_str, "BOOL") == 0){
-        tag->tag_type = TAG_CIP_TYPE_BOOL;
-        tag->elem_size = 1;
-    } else {
-        fprintf(stderr, "Unsupported tag type \"%s\"!", type_str);
-        usage();
-    }
-
-    /* match the dimensions. */
-    tag->dimensions[0] = 0;
-    tag->dimensions[1] = 0;
-    tag->dimensions[2] = 0;
-
-    num_dims = str_scanf(dim_str, "%zu,%zu,%zu,%*u", &tag->dimensions[0], &tag->dimensions[1], &tag->dimensions[2]);
-    if(num_dims < 1 || num_dims > 3) {
-        fprintf(stderr, "Tag dimensions must have at least one dimension non-zero and no more than three dimensions.");
-        usage();
-    }
-
-    /* check the dimensions. */
-    if(tag->dimensions[0] <= 0) {
-        fprintf(stderr, "The first tag dimension must be at least 1 and may not be negative!\n");
-        usage();
-    } else {
-        tag->elem_count = tag->dimensions[0];
-        tag->num_dimensions = 1;
-    }
-
-    if(tag->dimensions[1] > 0) {
-        tag->elem_count *= tag->dimensions[1];
-        tag->num_dimensions = 2;
-    } else {
-        tag->dimensions[1] = 1;
-    }
-
-    if(tag->dimensions[2] > 0) {
-        tag->elem_count *= tag->dimensions[2];
-        tag->num_dimensions = 3;
-    } else {
-        tag->dimensions[2] = 1;
-    }
-
-    /* copy the tag name */
-    tag->name = strdup(tag_name);
-    if (!tag->name) {
-        fprintf(stderr, "Unable to allocate a copy of the tag name \"%s\"!\n", tag_name);
-        usage();
-    }
-
-    /* allocate the tag data array. */
-    info("allocating %d elements of %d bytes each.", tag->elem_count, tag->elem_size);
-    tag->data = calloc(tag->elem_count, (size_t)tag->elem_size);
-    if(!tag->data) {
-        fprintf(stderr, "Unable to allocate tag data buffer!\n");
-        free(tag->name);
-    }
-
-    info("Processed \"%s\" into tag %s of type %x with dimensions (%d, %d, %d).", tag_str, tag->name, tag->tag_type, tag->dimensions[0], tag->dimensions[1], tag->dimensions[2]);
-
-    /* add the tag to the list. */
-    tag->next_tag = plc->tags;
-    plc->tags = tag;
-}
-
 
 /*
  * Process each request.  Dispatch to the correct
  * request type handler.
  */
 
-int request_handler(struct tcp_client *client)
+tcp_client_status_t request_handler(slice_p request, slice_p response, tcp_client_p client_arg)
 {
     int rc = TCP_CLIENT_DONE;
+    client_state_p client = (client_state_p)client_arg;
 
     /* dispatch the data */
     rc = eip_dispatch_request(client);

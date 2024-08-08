@@ -1,5 +1,5 @@
 /***************************************************************************
- *   Copyright (C) 2020 by Kyle Hayes                                      *
+ *   Copyright (C) 2024 by Kyle Hayes                                      *
  *   Author Kyle Hayes  kyle.hayes@gmail.com                               *
  *                                                                         *
  * This software is available under either the Mozilla Public License      *
@@ -33,32 +33,88 @@
 
 #pragma once
 
-#include <stdbool.h>
-#include <stdint.h>
 #include "compat.h"
 
-extern int util_sleep_ms(int ms);
-extern int64_t util_time_ms(void);
+/*
+ * Define thin wrappers around native POSIX and Windows mutex functions.
+ */
 
-static inline bool ptr_before(void *ptr, void *end) {
-    if(ptr && end) {
-        if((intptr_t)(ptr) < (intptr_t)(end)) {
-            return true;
-        }
-    }
 
-    return false;
+#if defined(IS_WINDOWS)
+    #include <processthreadsapi.h>
+    typedef HANDLE mutex_t;
+#else
+    #include <pthread.h>
+    typedef pthread_mutex_t mutex_t;
+#endif
+
+
+static inline int mutex_create(mutex_t *mut)
+{
+    int rc = 0;
+
+#if defined(IS_WINDOWS)
+    *mut = CreateMutex(NULL,                  /* default security attributes  */
+                     FALSE,                  /* initially not owned          */
+                     NULL);                  /* unnamed mutex                */
+    if(!*mut) { rc = 1; }
+#else
+    if(pthread_mutex_init(mut, NULL)) { rc = 1; }
+#endif
+
+    return rc;
 }
 
 
-static inline bool is_hex(char c) {
-    bool rc = false;
+static inline int mutex_lock(mutex_t *mut)
+{
+    int rc = 0;
 
-    if(c >= '0' && c <= '9') {
-        rc = true;
-    } else if((c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
-        rc = true;
+#if defined(IS_WINDOWS)
+    DWORD dwWaitResult = ~WAIT_OBJECT_0;;
+
+    while(dwWaitResult != WAIT_OBJECT_0) {
+        dwWaitResult = WaitForSingleObject(mut, INFINITE);
     }
+#else
+    if(pthread_mutex_lock(mut)) {
+        rc = 1;
+    }
+#endif
+
+    return rc;
+}
+
+
+static inline int mutex_unlock(mutex_t *mut)
+{
+    int rc = 0;
+
+#if defined(IS_WINDOWS)
+    if(!ReleaseMutex(mut)) {
+        rc = 1;
+    }
+#else
+    if(pthread_mutex_unlock(mut)) {
+        rc = 1;
+    }
+#endif
+
+    return rc;
+}
+
+
+static inline int mutex_destroy(mutex_t *mut)
+{
+    int rc = 0;
+
+#if defined(IS_WINDOWS)
+    CloseHandle(mut);
+#else
+    if(pthread_mutex_destroy(mut)) {
+        rc = 1;
+    }
+#endif
 
     return rc;
 }

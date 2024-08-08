@@ -1,5 +1,5 @@
 /***************************************************************************
- *   Copyright (C) 2020 by Kyle Hayes                                      *
+ *   Copyright (C) 2024 by Kyle Hayes                                      *
  *   Author Kyle Hayes  kyle.hayes@gmail.com                               *
  *                                                                         *
  * This software is available under either the Mozilla Public License      *
@@ -35,7 +35,7 @@
 
 #include <stddef.h>
 #include <stdint.h>
-#include "compat.h"
+#include "utils/mutex_compat.h"
 
 
 typedef uint16_t tag_type_t;
@@ -52,6 +52,8 @@ typedef uint16_t tag_type_t;
 #define TAG_CIP_TYPE_ULINT       ((tag_type_t)0x00C9) /* Unsigned 64–bit integer value */
 #define TAG_CIP_TYPE_REAL        ((tag_type_t)0x00CA) /* 32–bit floating point value, IEEE format */
 #define TAG_CIP_TYPE_LREAL       ((tag_type_t)0x00CB) /* 64–bit floating point value, IEEE format */
+
+// FIXME - this is wrong below!
 #define TAG_CIP_TYPE_STRING      ((tag_type_t)0x00D0) /* 88-byte string, with 82 bytes of data, 4-byte count and 2 bytes of padding */
 
 /* PCCC data types.   FIXME */
@@ -108,6 +110,9 @@ struct plc_connection_config {
 
     /* response delay */
     int response_delay;
+
+    /* default buffer size */
+    uint32_t default_buffer_size;
 };
 
 /* Define the context that is passed around. */

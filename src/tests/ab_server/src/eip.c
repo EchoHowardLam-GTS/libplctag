@@ -1,5 +1,5 @@
 /***************************************************************************
- *   Copyright (C) 2020 by Kyle Hayes                                      *
+ *   Copyright (C) 2024 by Kyle Hayes                                      *
  *   Author Kyle Hayes  kyle.hayes@gmail.com                               *
  *                                                                         *
  * This software is available under either the Mozilla Public License      *
@@ -34,9 +34,9 @@
 #include <stdlib.h>
 #include "cpf.h"
 #include "eip.h"
-#include "buf.h"
-#include "tcp_server.h"
-#include "utils.h"
+#include "utils/slice.h"
+#include "utils/tcp_server.h"
+#include "utils/time_utils.h"
 
 #define EIP_REGISTER_SESSION     ((uint16_t)0x0065)
    #define EIP_REGISTER_SESSION_SIZE (4) /* 4 bytes, 2 16-bit words */
@@ -67,8 +67,8 @@ static int unregister_session(tcp_client_p client, eip_header_s *header);
 int eip_dispatch_request(tcp_client_p client)
 {
     int rc = TCP_CLIENT_PROCESSED;
-    buf_t *request = &(client->request);
-    buf_t *response = &(client->response);
+    slice_p request = &(client->request);
+    slice_p response = &(client->response);
     eip_header_s header;
     uint16_t payload_len = 0;
 
@@ -175,8 +175,8 @@ int register_session(tcp_client_p client, eip_header_s *header)
         uint16_t option_flags;
     } register_request;
 
-    buf_t *request = &(client->request);
-    buf_t *response = &(client->response);
+    slice_p request = &(client->request);
+    slice_p response = &(client->response);
 
     /* the cursor is set by the calling routine */
     register_request.eip_version = buf_get_uint16_le(request);
@@ -239,8 +239,8 @@ int register_session(tcp_client_p client, eip_header_s *header)
 
 int unregister_session(tcp_client_p client, eip_header_s *header)
 {
-    buf_t *request = &(client->request);
-    buf_t *response = response;
+    slice_p request = &(client->request);
+    slice_p response = response;
 
     /* the caller set the cursor */
     // buf_set_uint16_le(response);

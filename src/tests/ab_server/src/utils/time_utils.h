@@ -1,5 +1,5 @@
 /***************************************************************************
- *   Copyright (C) 2020 by Kyle Hayes                                      *
+ *   Copyright (C) 2024 by Kyle Hayes                                      *
  *   Author Kyle Hayes  kyle.hayes@gmail.com                               *
  *                                                                         *
  * This software is available under either the Mozilla Public License      *
@@ -33,27 +33,32 @@
 
 #pragma once
 
+#include <stdbool.h>
 #include <stdint.h>
+#include "compat.h"
 
-typedef enum {
-    DEBUG_WARN,
-    DEBUG_INFO,
-    DEBUG_DETAIL,
-    DEBUG_FLOOD,
+extern int util_sleep_ms(int ms);
+extern int64_t util_time_ms(void);
 
-    DEBUG_ERROR = 1000,
-} debug_level_t;
+static inline bool ptr_before(void *ptr, void *end) {
+    if(ptr && end) {
+        if((intptr_t)(ptr) < (intptr_t)(end)) {
+            return true;
+        }
+    }
 
-/* debug helpers */
-extern void debug_set_level(debug_level_t level);
-extern debug_level_t debug_get_level(void);
+    return false;
+}
 
-extern void debug_impl(const char *func, int line, debug_level_t level, const char *templ, ...);
 
-#define error_assert(COND, ...) do { if(!(COND)) { debug_impl(__func__, __LINE__, DEBUG_ERROR, __VA_ARGS__); exit(1); } } while(0)
-#define warn(...) debug_impl(__func__, __LINE__, DEBUG_WARN, __VA_ARGS__)
-#define info(...) debug_impl(__func__, __LINE__, DEBUG_INFO, __VA_ARGS__)
-#define detail(...) debug_impl(__func__, __LINE__, DEBUG_DETAIL, __VA_ARGS__)
-#define flood(...) debug_impl(__func__, __LINE__, DEBUG_FLOOD, __VA_ARGS__)
+static inline bool is_hex(char c) {
+    bool rc = false;
 
-extern void debug_dump_buf(debug_level_t level, uint8_t *start, uint8_t *end);
+    if(c >= '0' && c <= '9') {
+        rc = true;
+    } else if((c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
+        rc = true;
+    }
+
+    return rc;
+}

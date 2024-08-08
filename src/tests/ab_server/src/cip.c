@@ -1,5 +1,5 @@
 /***************************************************************************
- *   Copyright (C) 2020 by Kyle Hayes                                      *
+ *   Copyright (C) 2024 by Kyle Hayes                                      *
  *   Author Kyle Hayes  kyle.hayes@gmail.com                               *
  *                                                                         *
  * This software is available under either the Mozilla Public License      *
@@ -35,12 +35,13 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include "cip.h"
+#include "utils/debug.h"
 #include "eip.h"
 #include "pccc.h"
 #include "plc.h"
-#include "buf.h"
-#include "tcp_server.h"
-#include "utils.h"
+#include "utils/slice.h"
+#include "utils/tcp_server.h"
+#include "utils/time_utils.h"
 
 
 /* tag commands */
@@ -71,7 +72,7 @@ const uint8_t CIP_FORWARD_OPEN_EX[] = { 0x5B, 0x02, 0x20, 0x06, 0x24, 0x01 };
 typedef struct {
     uint8_t service_code;   /* why is the operation code _before_ the path? */
     uint8_t path_size;      /* size in 16-bit words of the path */
-    buf_t path;           /* store this in a slice to avoid copying */
+    slice_t path;           /* store this in a slice to avoid copying */
 } cip_header_s;
 
 static int handle_forward_open(tcp_client_p client);
@@ -80,9 +81,9 @@ static int handle_read_request(tcp_client_p client);
 static int handle_write_request(tcp_client_p client);
 
 static int process_tag_segment(tcp_client_p client, tag_def_s **tag);
-static int process_tag_dim_index(buf_t *tag_path, tag_def_s *tag);
-static bool make_cip_error(buf_t *response, uint8_t cip_cmd, uint8_t cip_err, bool extend, uint16_t extended_error);
-static int match_path(buf_t *request, bool need_pad, uint8_t *path, uint8_t path_len);
+static int process_tag_dim_index(slice_p tag_path, tag_def_s *tag);
+static bool make_cip_error(slice_p response, uint8_t cip_cmd, uint8_t cip_err, bool extend, uint16_t extended_error);
+static int match_path(slice_p request, bool need_pad, uint8_t *path, uint8_t path_len);
 
 
 
@@ -90,11 +91,11 @@ static int match_path(buf_t *request, bool need_pad, uint8_t *path, uint8_t path
 int cip_dispatch_request(tcp_client_p client)
 {
     int rc = CIP_OK;
-    buf_t *request = &(client->request);
-    buf_t *response = &(client->response);
+    slice_p request = &(client->request);
+    slice_p response = &(client->response);
 
     info("Got packet:");
-    buf_dump(request);
+    debug_dump_buf(request->start, request->end);
 
     /* match the prefix and dispatch. */
     if(buf_match_bytes(request, CIP_READ, sizeof(CIP_READ))) {
@@ -165,8 +166,8 @@ typedef struct {
 int handle_forward_open(tcp_client_p client)
 {
     int rc = CIP_OK;
-    buf_t *request = &(client->request);
-    buf_t *response = &(client->response);
+    slice_p request = &(client->request);
+    slice_p response = &(client->response);
     buf_t conn_path;
     uint8_t fo_cmd = 0;
     forward_open_s fo_req = {0};
@@ -328,8 +329,8 @@ typedef struct {
 int handle_forward_close(tcp_client_p client)
 {
     int rc = CIP_OK;
-    buf_t *request = &(client->request);
-    buf_t *response = &(client->response);
+    slice_p request = &(client->request);
+    slice_p response = &(client->response);
     // buf_t conn_path;
     forward_close_s fc_req = {0};
     uint8_t path_length_words = 0;
@@ -438,8 +439,8 @@ int handle_forward_close(tcp_client_p client)
 int handle_read_request(tcp_client_p client)
 {
     int rc = CIP_OK;
-    buf_t *request = &(client->request);
-    buf_t *response = &(client->response);
+    slice_p request = &(client->request);
+    slice_p response = &(client->response);
     uint16_t cip_start_offset = 0;
     uint16_t cip_req_size = 0;
     uint8_t read_cmd = 0;
@@ -610,8 +611,8 @@ int handle_read_request(tcp_client_p client)
 int handle_write_request(tcp_client_p client)
 {
     int rc = CIP_OK;
-    buf_t *request = &(client->request);
-    buf_t *response = &(client->response);
+    slice_p request = &(client->request);
+    slice_p response = &(client->response);
     uint8_t write_cmd = 0;
     uint8_t tag_segment_size = 0;
     uint32_t byte_offset = 0;
@@ -735,7 +736,7 @@ int handle_write_request(tcp_client_p client)
 int process_tag_segment(tcp_client_p client, tag_def_s **tag)
 {
     int rc = CIP_OK;
-    buf_t *request = &(client->request);
+    slice_p request = &(client->request);
     uint8_t segment_type = 0;
     uint8_t name_len = 0;
     size_t dimensions[3] = { 0, 0, 0};
@@ -956,7 +957,7 @@ int process_tag_segment(tcp_client_p client, tag_def_s **tag)
     return true;
 }
 
-int process_tag_name(buf_t *tag_path, const char **name, uint8_t *name_len)
+int process_tag_name(slice_p tag_path, const char **name, uint8_t *name_len)
 {
     int rc = CIP_OK;
     uint8_t segment_type = 0;
@@ -983,7 +984,7 @@ int process_tag_name(buf_t *tag_path, const char **name, uint8_t *name_len)
 }
 
 
-int process_tag_dim_index(buf_t *tag_path, tag_def_s *tag)
+int process_tag_dim_index(slice_p tag_path, tag_def_s *tag)
 {
     int rc = CIP_OK;
 
@@ -992,7 +993,7 @@ int process_tag_dim_index(buf_t *tag_path, tag_def_s *tag)
 
 
 /* match a path.   This is tricky, thanks, Rockwell. */
-int match_path(buf_t *request, bool need_pad, uint8_t *path, uint8_t path_len)
+int match_path(slice_p request, bool need_pad, uint8_t *path, uint8_t path_len)
 {
     uint8_t input_path_len = 0;
 
@@ -1021,7 +1022,7 @@ int match_path(buf_t *request, bool need_pad, uint8_t *path, uint8_t path_len)
 
 
 
-bool make_cip_error(buf_t *response, uint8_t cip_cmd, uint8_t cip_err, bool extend, uint16_t extended_error)
+bool make_cip_error(slice_p response, uint8_t cip_cmd, uint8_t cip_err, bool extend, uint16_t extended_error)
 {
     /* cursor is set higher up in the call chain */
 
