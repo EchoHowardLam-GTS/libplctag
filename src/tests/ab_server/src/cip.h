@@ -33,7 +33,6 @@
 
 #pragma once
 
-#include "plc.h"
 #include "utils/slice.h"
 #include "utils/tcp_server.h"
 
@@ -51,7 +50,33 @@ enum {
     /* extended errors */
     CIP_ERR_EX_TOO_LONG = 0x2105,
     CIP_ERR_EX_DUPLICATE_CONN = 0x100,
-
 };
 
-extern int cip_dispatch_request(tcp_client_p client);
+#define MAX_CIP_DEVICE_PATH (20)
+
+typedef struct {
+    uint8_t path[MAX_CIP_DEVICE_PATH];
+    uint8_t path_len;
+
+    uint32_t client_connection_id;
+    uint16_t client_connection_seq;
+    uint16_t client_connection_serial_number;
+    uint16_t client_vendor_id;
+    uint32_t client_serial_number;
+    uint32_t client_to_server_rpi;
+    uint32_t client_to_server_max_packet;
+
+    uint32_t server_connection_id;
+    uint16_t server_connection_seq;
+    uint32_t server_to_client_rpi;
+    uint32_t server_to_client_max_packet;
+
+    bool is_connected;
+
+    /* debug */
+    int reject_fo_count;
+} cip_connection_t;
+
+typedef cip_connection_t *cip_connection_p;
+
+extern tcp_connection_status_t cip_dispatch_request(slice_p request, slice_p response, tcp_connection_p connection_arg);

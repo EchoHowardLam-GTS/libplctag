@@ -34,8 +34,9 @@
 #include <stdint.h>
 #include "cip.h"
 #include "cpf.h"
+#include "plc.h"
 #include "utils/debug.h"
-#include "eip.h"
+#include "utils/slice.h"
 #include "utils/time_utils.h"
 
 #define CPF_ITEM_NAI ((uint16_t)0x0000) /* NULL Address Item */
@@ -44,234 +45,171 @@
 #define CPF_ITEM_UDI ((uint16_t)0x00B2) /* Unconnected data item */
 
 
-typedef struct {
-    uint32_t interface_handle;
-    uint16_t router_timeout;
-    uint16_t item_count;        /* should be 2 for now. */
-    uint16_t item_addr_type;
-    uint16_t item_addr_length;
-    uint16_t item_data_type;
-    uint16_t item_data_length;
-} cpf_uc_header_s;
-
-#define CPF_UCONN_HEADER_SIZE (16)
-
-typedef struct {
-    uint32_t interface_handle;
-    uint16_t router_timeout;
-    uint16_t item_count;        /* should be 2 for now. */
-    uint16_t item_addr_type;
-    uint16_t item_addr_length;
-    uint32_t conn_id;
-    uint16_t item_data_type;
-    uint16_t item_data_length;
-    uint16_t conn_seq;
-} cpf_co_header_s;
-
-#define CPF_CONN_HEADER_SIZE (22)
 
 
-
-
-int handle_cpf_connected(tcp_client_p client)
+tcp_connection_status_t cpf_dispatch_connected_request(slice_p request, slice_p response, tcp_connection_p connection_arg)
 {
-    int rc;
-    slice_p request = &(client->request);
-    slice_p response = &(client->response);
-    uint16_t cpf_start_offset = 0;
-    uint16_t cip_start_offset = 0;
-    cpf_co_header_s header;
+    tcp_connection_status_t conn_rc = TCP_CONNECTION_PROCESSED;
+    plc_connection_p connection = (plc_connection_p)connection_arg;
+    slice_status_t slice_rc;
+    uint8_t *saved_start = response->start;
+    uint8_t *cip_start = NULL;
+    uint16_t payload_size = 0;
 
-    /* we must have some sort of payload. */
-    if(buf_len(request) <= CPF_CONN_HEADER_SIZE) {
-        info("Unusable size of connected CPF packet!");
-        return EIP_ERR_BAD_REQUEST;
-    }
+    do {
+        /* we must have some sort of payload. */
+        assert_warn((slice_len(request) >= CPF_CONN_HEADER_SIZE), TCP_CONNECTION_INCOMPLETE, "Unusable size of connected CPF packet!");
 
-    cpf_start_offset = buf_get_start(request);
+        /*
+            uint32_t interface_handle;
+            uint16_t router_timeout;
+            uint16_t item_count;
+            uint16_t item_addr_type;
+            uint16_t item_addr_length;
+            uint32_t conn_id;
+            uint16_t item_data_type;
+            uint16_t item_data_length;
+            uint16_t conn_seq;
+        */
 
-    /* unpack the request. */
-    header.interface_handle = buf_get_uint32_le(request);
-    header.router_timeout = buf_get_uint16_le(request);
-    header.item_count = buf_get_uint16_le(request);
+        slice_rc = slice_unpack(request, "u4,u2,u2,u2,u2,u4,u2,^,u2",
+                                        &connection->cpf_connection.co_header.interface_handle,
+                                        &connection->cpf_connection.co_header.router_timeout,
+                                        &connection->cpf_connection.co_header.item_count,
+                                        &connection->cpf_connection.co_header.item_addr_type,
+                                        &connection->cpf_connection.co_header.item_addr_length,
+                                        &connection->cpf_connection.co_header.conn_id,
+                                        &connection->cpf_connection.co_header.item_data_type,
+                                        &connection->cpf_connection.co_header.item_data_length,
+                                        &cip_start,
+                                        &connection->cpf_connection.co_header.conn_seq
+                            );
 
-    /* sanity check the number of items. */
-    if(header.item_count != (uint16_t)2) {
-        info("Unsupported connected CPF packet, expected two items but found %u!", header.item_count);
-        return EIP_ERR_BAD_REQUEST;
-    }
+        assert_error((slice_rc == SLICE_STATUS_OK), "Error unpacking slice %d!", slice_rc);
 
-    header.item_addr_type = buf_get_uint16_le(request);
-    header.item_addr_length = buf_get_uint16_le(request);
-    header.conn_id = buf_get_uint32_le(request);
-    header.item_data_type = buf_get_uint16_le(request);
-    header.item_data_length = buf_get_uint16_le(request);
+        assert_warn((connection->cpf_connection.co_header.item_count == (uint16_t)2), TCP_CONNECTION_BAD_REQUEST, "Malformed connected CPF packet, expected two CPF itemas but got %u!", connection->cpf_connection.co_header.item_count);
 
-    /* for some reason the connection sequence ID is
-     * considered to be part of the CIP packet not the CPF
-     * packet.   So get the cursor here and then get the seq ID.
-     */
-    cip_start_offset = buf_start(request) + buf_get_cursor(request);
+        assert_warn((connection->cpf_connection.co_header.item_addr_type == CPF_ITEM_CAI), TCP_CONNECTION_BAD_REQUEST, "Unsupported connected CPF packet, expected connected address item type but got %u!", connection->cpf_connection.co_header.item_addr_type);
 
-    header.conn_seq = buf_get_uint16_le(request);
+        assert_warn((connection->cpf_connection.co_header.item_addr_size == 0x04), TCP_CONNECTION_BAD_REQUEST, "Unsupported connected CPF packet, expected connected address item length of 4 but got %u!", connection->cpf_connection.co_header.item_addr_length);
 
-    /* sanity check the data. */
-    if(header.item_addr_type != CPF_ITEM_CAI) {
-        info("Expected connected address item but found %x!", header.item_addr_type);
-        return EIP_ERR_BAD_REQUEST;
-    }
+        assert_warn((connection->cpf_connection.co_header.item_data_type == CPF_ITEM_CDI), TCP_CONNECTION_BAD_REQUEST, "Unsupported connected CPF packet, expected connected address item type but got %u!", connection->cpf_connection.co_header.item_addr_type);
 
-    if(header.item_addr_length != 4) {
-        info("Expected address item length of 4 but found %d bytes!", header.item_addr_length);
-        return EIP_ERR_BAD_REQUEST;
-    }
+        assert_warn((connection->cpf_connection.co_header.conn_id == connection->cip_connection.server_connection_id), TCP_CONNECTION_BAD_REQUEST, "Expected connection ID %04x but found connection ID %04x!", connection->cip_connection.server_connection_id, connection->cpf_connection.co_header.conn_id);
 
-    if(header.conn_id != client->conn_config.server_connection_id) {
-        info("Expected connection ID %x but found connection ID %x!", client->conn_config.server_connection_id, header.conn_id);
-        return EIP_ERR_BAD_REQUEST;
-    }
+        assert_warn((connection->cpf_connection.co_header.item_data_length == (uint16_t)(request->end - cip_start)), TCP_CONNECTION_BAD_REQUEST, "CPF payload length, %d, does not match passed length, %d!", (buf_len(request) - cip_start_offset), connection->cpf_connection.co_header.item_data_length);
 
-    if(header.item_data_type != CPF_ITEM_CDI) {
-        info("Expected connected data item but found %x!", header.item_data_type);
-        return EIP_ERR_BAD_REQUEST;
-    }
+        /* set up response. */
+        saved_start = response->start;
+        response->start += CPF_CONN_HEADER_SIZE;
 
-    if(header.item_data_length != (buf_len(request) - cip_start_offset)) {
-        info("CPF payload length, %d, does not match passed length, %d!", (buf_len(request) - cip_start_offset), header.item_data_length);
-        return EIP_ERR_BAD_REQUEST;
-    }
+        conn_rc = cip_dispatch_request(request, response, connection_arg);
 
-    /* do we care about the sequence ID?   Should check. */
-    client->conn_config.server_connection_seq = header.conn_seq;
+        payload_size = (uint16_t)(response->end - cip_start);
 
-    /*
-     * note that we take the cursor from the request and apply it to the response.
-     * This is OK because everything before the CIP packet is fixed length.  Probably a
-     * bit shady though.
-     */
-    buf_set_start(request, buf_get_cursor(request));
-    buf_set_cursor(request, 0);
+        assert_warn((conn_rc != TCP_CONNECTION_PROCESSED), TCP_CONNECTION_BAD_REQUEST, "CIP layer processing failed!");
 
-    buf_set_start(response, buf_get_cursor(request));
-    buf_set_cursor(request, 0);
+        /* reset the response start to where it was. */
+        response->start = saved_start;
 
-    rc = cip_dispatch_request(client);
+        slice_rc = slice_pack(response, "u4,u2,u2,u2,u2,u4,u2,u2",
+                                        connection->cpf_connection.co_header.interface_handle,
+                                        connection->cpf_connection.co_header.router_timeout,
+                                        connection->cpf_connection.co_header.item_count,
+                                        connection->cpf_connection.co_header.item_addr_type,
+                                        connection->cpf_connection.co_header.item_addr_length,
+                                        connection->cpf_connection.co_header.conn_id,
+                                        connection->cpf_connection.co_header.item_data_type,
+                                        payload_size,
+                                        connection->cpf_connection.co_header.conn_seq
+                            );
 
-    if(rc == CIP_OK) {
-        /* build outbound header. */
-        uint16_t cip_payload_size = buf_len(response);
+        assert_error((slice_rc == SLICE_STATUS_OK), "Error packing response slice %d!", slice_rc);
 
-        buf_set_start(response, cpf_start_offset);
-        buf_set_cursor(response, 0);
+        /* let the previous layer handle the response */
+    } while(0);
 
-        buf_set_uint32_le(response, header.interface_handle);
-        buf_set_uint16_le(response, header.router_timeout);
-        buf_set_uint16_le(response, 2); /* two items. */
-        buf_set_uint16_le(response, CPF_ITEM_CAI); /* connected address type. */
-        buf_set_uint16_le(response, 4); /* connection ID is 4 bytes. */
-        buf_set_uint32_le(response, client->conn_config.client_connection_id);
-        buf_set_uint16_le(response, CPF_ITEM_CDI); /* connected data type */
-        buf_set_uint16_le(response, (uint16_t)(cip_payload_size + 2)); /* MAGIC, +2 for the connection sequence ID */
-        buf_set_uint16_le(response, client->conn_config.server_connection_seq);
-    }
+    /* errors are passed through. */
 
-    /* errors are pass through. */
-
-    return rc;
+    return conn_rc;
 }
 
 
-int handle_cpf_unconnected(tcp_client_p client)
+int cpf_dispatch_unconnected_request(slice_p request, slice_p response, tcp_connection_p connection_arg)
 {
-    int rc;
-    slice_p request = &(client->request);
-    slice_p response = &(client->response);
-    uint16_t cpf_start_offset = 0;
-    uint16_t cip_start_offset = 0;
-    cpf_uc_header_s header;
+    tcp_connection_status_t conn_rc = TCP_CONNECTION_PROCESSED;
+    slice_status_t slice_rc = SLICE_STATUS_OK;
+    plc_connection_p connection = (plc_connection_p)connection_arg;
+    uint8_t *saved_start = NULL;
+    uint16_t payload_size = 0;
 
-    info("handle_cpf_unconnected(): got request:");
-    buf_dump(request);
+    info("got request:");
+    debug_dump_buf(DEBUG_INFO, request->start, request->end);
 
-    /* we must have some sort of payload. */
-    if(buf_len(request) <= CPF_UCONN_HEADER_SIZE) {
-        info("Unusable size of unconnected CPF packet!");
-        return EIP_ERR_BAD_REQUEST;
-    }
+    do {
+        /* we must have some sort of payload. */
+        assert_warn((slice_len(request) >= CPF_UCONN_HEADER_SIZE), TCP_CONNECTION_INCOMPLETE, "Unusable size of connected CPF packet!");
 
-    cpf_start_offset = buf_get_start(request);
+        /*
+            uint32_t interface_handle;
+            uint16_t router_timeout;
+            uint16_t item_count;
+            uint16_t item_addr_type;
+            uint16_t item_addr_length;
+            uint16_t item_data_type;
+            uint16_t item_data_length;
+        */
 
-    /* unpack the request. The caller set the cursor. */
-    header.interface_handle = buf_get_uint32_le(request);
-    header.router_timeout = buf_get_uint16_le(request);
-    header.item_count = buf_get_uint16_le(request);
+        slice_rc = slice_unpack(request, "u4,u2,u2,u2,u2,u2,u2",
+                                          &connection->cpf_connection.uc_header.interface_handle,
+                                          &connection->cpf_connection.uc_header.router_timeout,
+                                          &connection->cpf_connection.uc_header.item_count,
+                                          &connection->cpf_connection.uc_header.item_addr_type,
+                                          &connection->cpf_connection.uc_header.item_addr_length,
+                                          &connection->cpf_connection.uc_header.item_data_type,
+                                          &connection->cpf_connection.uc_header.item_data_length
+                                );
 
-    /* sanity check the number of items. */
-    if(header.item_count != (uint16_t)2) {
-        info("Unsupported unconnected CPF packet, expected two items but found %u!", header.item_count);
-        return EIP_ERR_BAD_REQUEST;
-    }
+        assert_error((slice_rc == SLICE_STATUS_OK), "Error unpacking slice %d!", slice_rc);
 
-    header.item_addr_type = buf_get_uint16_le(request);
-    header.item_addr_length = buf_get_uint16_le(request);
-    header.item_data_type = buf_get_uint16_le(request);
-    header.item_data_length = buf_get_uint16_le(request);
+        assert_warn((connection->cpf_connection.uc_header.item_count == (uint16_t)2), TCP_CONNECTION_BAD_REQUEST, "Malformed connected CPF packet, expected two CPF itemas but got %u!", connection->cpf_connection.co_header.item_count);
 
-    /* sanity check the data. */
-    if(header.item_addr_type != CPF_ITEM_NAI) {
-        info("Expected null address item but found %x!", header.item_addr_type);
-        return EIP_ERR_BAD_REQUEST;
-    }
+        assert_warn((connection->cpf_connection.uc_header.item_addr_type == CPF_ITEM_NAI), TCP_CONNECTION_BAD_REQUEST, "Unsupported connected CPF packet, expected connected address item type but got %u!", connection->cpf_connection.co_header.item_addr_type);
 
-    if(header.item_addr_length != 0) {
-        info("Expected zero address item length but found %d bytes!", header.item_addr_length);
-        return EIP_ERR_BAD_REQUEST;
-    }
+        assert_warn((connection->cpf_connection.uc_header.item_data_type == CPF_ITEM_UDI), TCP_CONNECTION_BAD_REQUEST, "Unsupported connected CPF packet, expected connected address item type but got %u!", connection->cpf_connection.co_header.item_addr_type);
 
-    if(header.item_data_type != CPF_ITEM_UDI) {
-        info("Expected unconnected data item but found %x!", header.item_data_type);
-        return EIP_ERR_BAD_REQUEST;
-    }
+        assert_warn((connection->cpf_connection.uc_header.item_data_length == (uint16_t)(request->end - cip_start)), TCP_CONNECTION_BAD_REQUEST, "CPF payload length, %d, does not match passed length, %d!", (buf_len(request) - cip_start_offset), connection->cpf_connection.co_header.item_data_length);
 
-    if(header.item_data_length != (buf_len(request) - buf_get_cursor(request))) {
-        info("CPF unconnected payload length, %d, does not match passed length, %d!", (buf_len(request) - buf_get_cursor(request)), header.item_data_length);
-        return EIP_ERR_BAD_REQUEST;
-    }
+        /* set up response. */
+        saved_start = response->start;
+        response->start += CPF_UCONN_HEADER_SIZE;
 
-    /* dispatch and handle the result. Set the cursor in the right place in the response. */
+        conn_rc = cip_dispatch_request(request, response, connection_arg);
 
-    /*
-     * note that we take the cursor from the request and apply it to the response.
-     * This is OK because everything before the CIP packet is fixed length.  Probably a
-     * bit shady though.
-     */
-    cip_start_offset = buf_get_cursor(request);
+        assert_warn((conn_rc != TCP_CONNECTION_PROCESSED), TCP_CONNECTION_BAD_REQUEST, "CIP layer processing failed!");
 
-    buf_set_start(request, cip_start_offset);
-    buf_set_cursor(request, 0);
+        payload_size = (uint16_t)slice_len(response);
 
-    buf_set_start(response, cip_start_offset);
-    buf_set_cursor(response, 0);
+        /* reset the response start to where it was. */
+        response->start = saved_start;
 
-    rc = cip_dispatch_request(client);
+        /* generate the CPF response header */
+        slice_rc = slice_pack(response, "u4,u2,u2,u2,u2,u2,u2",
+                                          connection->cpf_connection.uc_header.interface_handle,
+                                          connection->cpf_connection.uc_header.router_timeout,
+                                          connection->cpf_connection.uc_header.item_count,
+                                          connection->cpf_connection.uc_header.item_addr_type,
+                                          connection->cpf_connection.uc_header.item_addr_length,
+                                          connection->cpf_connection.uc_header.item_data_type,
+                                          payload_size
+                            );
 
-    if(rc == CIP_OK) {
-        /* build outbound header. */
-        uint16_t cip_payload_size = buf_len(response);
+        assert_error((slice_rc == SLICE_STATUS_OK), "Error packing response slice %d!", slice_rc);
 
-        buf_set_start(response, cpf_start_offset);
-        buf_set_cursor(response, 0);
-
-        buf_set_uint32_le(response, header.interface_handle);
-        buf_set_uint16_le(response, header.router_timeout);
-        buf_set_uint16_le(response, 2); /* two items. */
-        buf_set_uint16_le(response, CPF_ITEM_NAI); /* connected address type. */
-        buf_set_uint16_le(response, 0); /* No connection ID. */
-        buf_set_uint16_le(response, CPF_ITEM_UDI); /* connected data type */
-        buf_set_uint16_le(response, (uint16_t)(cip_payload_size));
-    }
+        /* let the previous layer handle the response */
+    } while(0);
 
     /* errors are pass through. */
 
-    return rc;
+    return conn_rc;
 }

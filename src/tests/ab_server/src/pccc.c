@@ -55,14 +55,14 @@ const uint8_t PCCC_RESP_PREFIX[] = { 0xcb, 0x00, 0x00, 0x00, 0x07, 0x3d, 0xf3, 0
 // 4f f0 fa da 07 - file is wrong size.
 // 4f f0 a6 b3 0e - command could not be decoded
 
-static int handle_plc5_read_request(tcp_client_p client);
-static int handle_plc5_write_request(tcp_client_p client);
-static int handle_slc_read_request(tcp_client_p client);
-static int handle_slc_write_request(tcp_client_p client);
-static int make_pccc_error(tcp_client_p client, uint8_t err_code);
+static int handle_plc5_read_request(tcp_connection_p connection);
+static int handle_plc5_write_request(tcp_connection_p connection);
+static int handle_slc_read_request(tcp_connection_p connection);
+static int handle_slc_write_request(tcp_connection_p connection);
+static int make_pccc_error(tcp_connection_p connection, uint8_t err_code);
 
 
-int dispatch_pccc_request(tcp_client_p client_arg)
+int dispatch_pccc_request(tcp_connection_p client_arg)
 {
     int rc = PCCC_OK;
     slice_p request = &(client->request);
@@ -143,7 +143,7 @@ int dispatch_pccc_request(tcp_client_p client_arg)
 }
 
 
-int handle_plc5_read_request(tcp_client_p client)
+int handle_plc5_read_request(tcp_connection_p connection)
 {
     int rc = PCCC_OK;
     slice_p request = &(client->request);
@@ -240,7 +240,7 @@ int handle_plc5_read_request(tcp_client_p client)
 }
 
 
-int handle_plc5_write_request(tcp_client_p client)
+int handle_plc5_write_request(tcp_connection_p connection)
 {
     int rc = PCCC_OK;
     slice_p request = &(client->request);
@@ -345,7 +345,7 @@ int handle_plc5_write_request(tcp_client_p client)
 }
 
 
-int handle_slc_read_request(tcp_client_p client)
+int handle_slc_read_request(tcp_connection_p connection)
 {
     int rc = PCCC_OK;
     slice_p request = &(client->request);
@@ -460,7 +460,7 @@ int handle_slc_read_request(tcp_client_p client)
 
 
 
-int handle_slc_write_request(tcp_client_p client)
+int handle_slc_write_request(tcp_connection_p connection)
 {
     int rc = PCCC_OK;
     slice_p request = &(client->request);
@@ -590,7 +590,7 @@ int handle_slc_write_request(tcp_client_p client)
 
 
 
-int make_pccc_error(tcp_client_p client, uint8_t err_code)
+int make_pccc_error(tcp_connection_p connection, uint8_t err_code)
 {
     slice_p response = &(client->response);
 

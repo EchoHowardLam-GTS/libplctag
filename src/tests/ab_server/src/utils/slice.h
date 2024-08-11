@@ -110,6 +110,10 @@ extern slice_status_t slice_from_slice(slice_p parent, slice_p new_slice, uint8_
  *
  * pack and unpack
  *
+ * [0-9A-F]{2} - two digit hex value.
+ *      pack: insert the byte value directly.
+ *    unpack: match the byte value directly.
+ *
  * , = ignored, used as visual separation in format string.
  *
  * < - set encode/decode to little-endian. No result.

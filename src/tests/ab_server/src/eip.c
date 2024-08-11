@@ -34,6 +34,7 @@
 #include <stdlib.h>
 #include "cpf.h"
 #include "eip.h"
+#include "utils/debug.h"
 #include "utils/slice.h"
 #include "utils/tcp_server.h"
 #include "utils/time_utils.h"
@@ -57,197 +58,196 @@ typedef struct {
     uint32_t status;
     uint64_t sender_context;
     uint32_t options;
-} eip_header_s;
+} eip_header_t;
 
 
-static int register_session(tcp_client_p client, eip_header_s *header);
-static int unregister_session(tcp_client_p client, eip_header_s *header);
+static plc_status_t register_session(slice_p request, slice_p parent_response, plc_connection_p connection_arg);
+static plc_status_t unregister_session(slice_p request, slice_p parent_response, plc_connection_p connection_arg);
 
 
-int eip_dispatch_request(tcp_client_p client)
+plc_status_t eip_dispatch_request(slice_p request, slice_p response, tcp_connection_p connection_arg)
 {
-    int rc = TCP_CLIENT_PROCESSED;
-    slice_p request = &(client->request);
-    slice_p response = &(client->response);
-    eip_header_s header;
-    uint16_t payload_len = 0;
+    int rc = TCP_CONNECTION_PROCESSED;
+    slice_status_t slice_rc = SLICE_STATUS_OK;
+    plc_connection_p connection = (plc_connection_p)connection_arg;
+    uint8_t *saved_start = NULL;
 
     info("eip_dispatch_request(): got packet:");
-    buf_dump(request);
+    debug_dump_buf(DEBUG_INFO, request->start, request->end);
 
-    if(buf_len(request) < EIP_HEADER_SIZE) {
-        return TCP_CLIENT_INCOMPLETE;
+    do {
+        uint32_t session_handle = 0;
+
+        assert_detail((slice_len(request) >= EIP_HEADER_SIZE), TCP_CONNECTION_INCOMPLETE, "Not enough data for the EIP header.  Go get more.");
+
+        /* unpack connection->eip_connection. */
+        slice_rc = slice_unpack(request, "u2,u2,u4,u4,u8,u4",
+                                &connection->eip_connection.command,
+                                &connection->eip_connection.length,
+                                &session_handle,
+                                &connection->eip_connection.status,
+                                &connection->eip_connection.sender_context,
+                                &connection->eip_connection.options
+                            );
+
+        /* these errors are terminal since the format is hardcoded in the executable. */
+        if(slice_rc != SLICE_STATUS_OK) {
+            if(slice_rc == SLICE_ERR_TOO_LITTLE_DATA) {
+                rc = TCP_CONNECTION_INCOMPLETE;
+                break;
+            } else {
+                rc = TCP_CONNECTION_BAD_REQUEST;
+                break;
+            }
+        }
+
+        /* any other status is terminal */
+        assert_error((slice_rc == SLICE_STATUS_OK), "Failed to process request slice with slice error %!", slice_rc);
+
+        /* sanity checks */
+        assert_detail((slice_len(request) > (uint32_t)(connection->eip_connection.length + (uint32_t)EIP_HEADER_SIZE)),
+                      TCP_CONNECTION_INCOMPLETE,"Partial EIP packet, returning for more data."
+                    );
+
+        /* If we have a session handle already, we must match it with the incoming request */
+        assert_warn(((!connection->eip_connection.session_handle) || (session_handle == connection->eip_connection.session_handle)),
+                     TCP_CONNECTION_BAD_REQUEST,
+                     "Request session handle %08"PRIx32" does not match the one for this connection, %08"PRIx32"!",
+                     session_handle,
+                     connection->eip_connection.session_handle
+                    );
+
+        /* save the start of the current response and update the start for the next layer */
+        saved_start = response->start;
+        response->start = response->start + EIP_HEADER_SIZE;
+
+        /* dispatch the request */
+        switch(connection->eip_connection.command) {
+            case EIP_REGISTER_SESSION:
+                rc = register_session(request, response, connection);
+                break;
+
+            case EIP_UNREGISTER_SESSION:
+                rc = unregister_session(request, response, connection);
+                break;
+
+            case EIP_CONNECTED_SEND:
+                rc = cpf_dispatch_connected_request(request, response, connection);
+                break;
+
+            case EIP_UNCONNECTED_SEND:
+                rc = cpf_dispatch_unconnected_request(request, response, connection);
+                break;
+
+            default:
+                rc = TCP_CONNECTION_UNSUPPORTED;
+                break;
+        }
+
+        /* are we terminating the connection or so broken that we need to? */
+        if(rc == TCP_CONNECTION_DONE) {
+            break;
+        }
+
+        if(rc == TCP_CONNECTION_PROCESSED) {
+            uint32_t payload_length = slice_len(response);
+
+            /* set up the response. */
+            response->start = saved_start;
+
+            slice_rc = slice_pack(response, "u2,u2,u4,u4,u8,u4",
+                                            connection->eip_connection.command,
+                                            (uint16_t)(payload_length),
+                                            connection->eip_connection.session_handle,
+                                            connection->eip_connection.status,
+                                            connection->eip_connection.sender_context,
+                                            connection->eip_connection.options
+                                 );
+
+            if(slice_rc == SLICE_ERR_TOO_LITTLE_SPACE) {
+                warn("Insufficient space in the parent_response buffer!");
+                break;
+            }
+
+            assert_warn((slice_rc != SLICE_ERR_TOO_LITTLE_SPACE), TCP_CONNECTION_INCOMPLETE, "Insufficient space in the parent_response buffer!");
+
+            assert_error((slice_rc == SLICE_STATUS_OK), "Fatal slice error, %d, processing data!", slice_rc);
+        }
+    } while(0);
+
+    if(rc == TCP_CONNECTION_PROCESSED) {
+        /* if there is a parent_response delay requested, then wait a bit. */
+        if(connection->eip_connection.response_delay > 0) {
+            util_sleep_ms(connection->eip_connection.response_delay);
+        }
     }
 
-    /* unpack header. */
-    buf_set_cursor(request, 0);
-    header.command = buf_get_uint16_le(request);
-    header.length = buf_get_uint16_le(request);
-    header.session_handle = buf_get_uint32_le(request);
-    header.status = buf_get_uint32_le(request);
-    header.sender_context = buf_get_uint64_le(request);
-    header.options = buf_get_uint32_le(request);
-
-    /* sanity checks */
-    if(buf_len(request) < (uint16_t)(header.length + (uint16_t)EIP_HEADER_SIZE)) {
-        info("Partial EIP packet, returning for more data.");
-        buf_set_cursor(request, 0);
-
-        return TCP_CLIENT_INCOMPLETE;
-    }
-
-    /* set up the request for the next layer */
-    buf_set_start(request, buf_cursor_abs(request));
-    buf_set_cursor(request, 0);
-
-    /* set up the response.  Reserve space for the EIP header. */
-    buf_set_start(response, (uint16_t)EIP_HEADER_SIZE);
-    buf_set_cursor(response, 0);
-
-    /* dispatch the request */
-    switch(header.command) {
-        case EIP_REGISTER_SESSION:
-            rc = register_session(client, &header);
-            break;
-
-        case EIP_UNREGISTER_SESSION:
-            rc = unregister_session(client, &header);
-            break;
-
-        case EIP_CONNECTED_SEND:
-            rc = handle_cpf_connected(client);
-            break;
-
-        case EIP_UNCONNECTED_SEND:
-            rc = handle_cpf_unconnected(client);
-            break;
-
-        default:
-            rc = TCP_CLIENT_UNSUPPORTED;
-            break;
-    }
-
-    /* cap off the response */
-    buf_cap_end(response);
-
-    if(rc == EIP_OK) {
-        /* build response */
-        payload_len = buf_len(response);
-
-        buf_set_start(response, 0);
-        buf_set_cursor(response, 0);
-
-        buf_set_uint16_le(response, header.command);
-        buf_set_uint16_le(response, payload_len); /* EIP payload size in bytes */
-        buf_set_uint32_le(response, client->conn_config.session_handle);
-        buf_set_uint32_le(response, (uint32_t)0); /* status == 0 -> no error */
-        buf_set_uint64_le(response, client->conn_config.sender_context);
-        buf_set_uint32_le(response, header.options);
-
-        /* The payload is already in place. */
-        return TCP_CLIENT_PROCESSED;
-    } else if(rc == TCP_CLIENT_DONE) {
-        /* just pass this through, normally not an error. */
-        info("Done with connection.");
-
-        return rc;
-    } else {
-        /* error condition. */
-        buf_set_start(response, 0);
-        buf_set_cursor(response, 0);
-
-        buf_set_uint16_le(response, header.command);
-        buf_set_uint16_le(response, (uint16_t)0);  /* no payload. */
-        buf_set_uint32_le(response, client->conn_config.session_handle);
-        buf_set_uint32_le(response, (uint32_t)rc); /* status */
-        buf_set_uint64_le(response, client->conn_config.sender_context);
-        buf_set_uint32_le(response, header.options);
-
-        return TCP_CLIENT_PROCESSED;
-    }
+    return rc;
 }
 
 
-int register_session(tcp_client_p client, eip_header_s *header)
+
+plc_status_t register_session(slice_p request, slice_p response, plc_connection_p connection)
 {
+    plc_status_t rc = TCP_CONNECTION_PROCESSED;
+    slice_status_t slice_rc = SLICE_STATUS_OK;
+    uint8_t *saved_start = response->start;
+
     struct {
         uint16_t eip_version;
         uint16_t option_flags;
     } register_request;
 
-    slice_p request = &(client->request);
-    slice_p response = &(client->response);
+    do {
+        slice_rc = slice_unpack(request, "u2,u2",
+                                          &register_request.eip_version,
+                                          &register_request.option_flags
+                               );
 
-    /* the cursor is set by the calling routine */
-    register_request.eip_version = buf_get_uint16_le(request);
-    register_request.option_flags = buf_get_uint16_le(request);
+        assert_error((slice_rc == SLICE_STATUS_OK), "Error with unpacking from the request slice!");
 
-    /* sanity checks.  The command and packet length are checked by now. */
+        /* sanity checks.  The command and packet length are checked by now. */
 
-    /* session_handle must be zero. */
-    if(header->session_handle != (uint32_t)0) {
-        info("Request failed sanity check: request session handle is %u but should be zero.", header->session_handle);
+        /* session_handle must be zero. */
+        assert_warn((connection->eip_connection.session_handle == (uint32_t)0), TCP_CONNECTION_BAD_REQUEST, "Request failed sanity check: request session handle is %04"PRIx32" but should be zero.", connection->eip_connection.session_handle);
 
-        return EIP_ERR_BAD_REQUEST;
-    }
+        /* status must be zero. */
+        assert_warn((connection->eip_connection.status == (uint32_t)0), TCP_CONNECTION_BAD_REQUEST, "Request failed sanity check: request status is %04"PRIx32" but should be zero.", connection->eip_connection.status);
 
-    /* session status must be zero. */
-    if(header->status != (uint32_t)0) {
-        info("Request failed sanity check: request status is %u but should be zero.", header->status);
+        /* sender context must be zero? */
+        assert_warn((connection->eip_connection.sender_context == (uint64_t)0), TCP_CONNECTION_BAD_REQUEST, "Request failed sanity check: request sender context is %08"PRIx64" but should be zero.", connection->eip_connection.sender_context);
 
-        return EIP_ERR_BAD_REQUEST;
-    }
+        /* request EIP version must be 1 (one). */
+        assert_warn((register_request.eip_version == (uint32_t)1), TCP_CONNECTION_BAD_REQUEST, "Request failed sanity check: request EIP version is %04"PRIx32" but should be one (1).", register_request.eip_version);
 
-    /* session sender context must be zero. */
-    if(header->sender_context != (uint64_t)0) {
-        info("Request failed sanity check: request sender context should be zero.");
+        /* request option flags must be zero. */
+        assert_warn((register_request.option_flags == (uint32_t)0), TCP_CONNECTION_BAD_REQUEST, "Request failed sanity check: request option flags is %04"PRIx32" but should be zero.", register_request.option_flags);
 
-        return EIP_ERR_BAD_REQUEST;
-    }
+        /* all good, generate a session handle. */
+        connection->eip_connection.session_handle = (uint32_t)rand();
 
-    /* session options must be zero. */
-    if(header->options != (uint32_t)0) {
-        info("Request failed sanity check: request options is %u but should be zero.", header->options);
+        slice_rc = slice_pack(response, "u2,u2",
+                                         &register_request.eip_version,
+                                         &register_request.option_flags
+                             );
 
-        return EIP_ERR_BAD_REQUEST;
-    }
+        assert_error((slice_rc == SLICE_STATUS_OK), "Error with packing into the parent_response slice!");
 
-    /* EIP version must be 1. */
-    if(register_request.eip_version != EIP_VERSION) {
-        info("Request failed sanity check: request EIP version is %u but should be %u.", register_request.eip_version, EIP_VERSION);
+        /* cap off the response. */
+        response->end = response->start;
+        response->start = saved_start;
+    } while(0);
 
-        return EIP_ERR_BAD_REQUEST;
-    }
-
-    /* Session request option flags must be zero. */
-    if(register_request.option_flags != (uint16_t)0) {
-        info("Request failed sanity check: request option flags field is %u but should be zero.",register_request.option_flags);
-
-        return EIP_ERR_BAD_REQUEST;
-    }
-
-    /* all good, generate a session handle. */
-    client->conn_config.session_handle = header->session_handle = (uint32_t)rand();
-
-    /* build the response. The calling routine set the cursor. */
-    buf_set_uint16_le(response, register_request.eip_version);
-    buf_set_uint16_le(response, register_request.option_flags);
-
-    return EIP_OK;
+    return rc;
 }
 
 
-int unregister_session(tcp_client_p client, eip_header_s *header)
+plc_status_t unregister_session(slice_p request, slice_p parent_response, tcp_connection_p connection)
 {
-    slice_p request = &(client->request);
-    slice_p response = response;
+    (void)request;
+    (void)parent_response;
+    (void)connection;
 
-    /* the caller set the cursor */
-    // buf_set_uint16_le(response);
-    if(header->session_handle == client->conn_config.session_handle) {
-        return EIP_OK;
-    } else {
-        info("WARN: session handle does not match session handle in the unregister session request!");
-        return EIP_ERR_BAD_REQUEST;
-    }
+    /* shut down the connection */
+    return TCP_CONNECTION_DONE;
 }

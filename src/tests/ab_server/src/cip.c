@@ -75,12 +75,12 @@ typedef struct {
     slice_t path;           /* store this in a slice to avoid copying */
 } cip_header_s;
 
-static int handle_forward_open(tcp_client_p client);
-static int handle_forward_close(tcp_client_p client);
-static int handle_read_request(tcp_client_p client);
-static int handle_write_request(tcp_client_p client);
+static int handle_forward_open(tcp_connection_p connection);
+static int handle_forward_close(tcp_connection_p connection);
+static int handle_read_request(tcp_connection_p connection);
+static int handle_write_request(tcp_connection_p connection);
 
-static int process_tag_segment(tcp_client_p client, tag_def_s **tag);
+static int process_tag_segment(tcp_connection_p connection, tag_def_s **tag);
 static int process_tag_dim_index(slice_p tag_path, tag_def_s *tag);
 static bool make_cip_error(slice_p response, uint8_t cip_cmd, uint8_t cip_err, bool extend, uint16_t extended_error);
 static int match_path(slice_p request, bool need_pad, uint8_t *path, uint8_t path_len);
@@ -88,7 +88,7 @@ static int match_path(slice_p request, bool need_pad, uint8_t *path, uint8_t pat
 
 
 
-int cip_dispatch_request(tcp_client_p client)
+int cip_dispatch_request(tcp_connection_p connection)
 {
     int rc = CIP_OK;
     slice_p request = &(client->request);
@@ -163,7 +163,7 @@ typedef struct {
 #define CIP_FORWARD_OPEN_EX_MIN_SIZE   (46)
 
 
-int handle_forward_open(tcp_client_p client)
+int handle_forward_open(tcp_connection_p connection)
 {
     int rc = CIP_OK;
     slice_p request = &(client->request);
@@ -326,7 +326,7 @@ typedef struct {
 #define CIP_FORWARD_CLOSE_MIN_SIZE   (16)
 
 
-int handle_forward_close(tcp_client_p client)
+int handle_forward_close(tcp_connection_p connection)
 {
     int rc = CIP_OK;
     slice_p request = &(client->request);
@@ -436,7 +436,7 @@ int handle_forward_close(tcp_client_p client)
 #define CIP_READ_MIN_SIZE (6)
 #define CIP_READ_FRAG_MIN_SIZE (10)
 
-int handle_read_request(tcp_client_p client)
+int handle_read_request(tcp_connection_p connection)
 {
     int rc = CIP_OK;
     slice_p request = &(client->request);
@@ -608,7 +608,7 @@ int handle_read_request(tcp_client_p client)
 #define CIP_WRITE_MIN_SIZE (6)
 #define CIP_WRITE_FRAG_MIN_SIZE (10)
 
-int handle_write_request(tcp_client_p client)
+int handle_write_request(tcp_connection_p connection)
 {
     int rc = CIP_OK;
     slice_p request = &(client->request);
@@ -733,7 +733,7 @@ int handle_write_request(tcp_client_p client)
  * find the tag name, then check the numeric segments, if any, against the
  * tag dimensions.
  */
-int process_tag_segment(tcp_client_p client, tag_def_s **tag)
+int process_tag_segment(tcp_connection_p connection, tag_def_s **tag)
 {
     int rc = CIP_OK;
     slice_p request = &(client->request);

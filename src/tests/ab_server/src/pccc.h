@@ -46,4 +46,10 @@ enum {
 
 };
 
-extern int dispatch_pccc_request(tcp_client_p client);
+typedef struct {
+    uint16_t pccc_seq_id;
+} pccc_connection_t;
+
+typedef pccc_connection_t *pccc_connection_p;
+
+extern plc_status_t dispatch_pccc_request(slice_p request, slice_p response, tcp_connection_p connection_arg);

@@ -39,28 +39,34 @@
 
 
 typedef enum {
-    TCP_CLIENT_INCOMPLETE = 1001,
-    TCP_CLIENT_PROCESSED = 1002,
-    TCP_CLIENT_DONE = 1003,
-    TCP_CLIENT_BAD_REQUEST = 1004,
-    TCP_CLIENT_UNSUPPORTED = 1005,
-} tcp_client_status_t;
+    TCP_CONNECTION_PROCESSED = 1001,
+    TCP_CONNECTION_DONE,
+    TCP_CONNECTION_INCOMPLETE,
+    TCP_CONNECTION_BAD_REQUEST,
+    TCP_CONNECTION_UNSUPPORTED,
+
+    TCP_CONNECTION_STATUS_LAST,
+} tcp_connection_status_t;
 
 
-typedef struct tcp_client *(*tcp_client_allocate_func)(void *app_data);
-typedef tcp_client_status_t (*tcp_client_handler_func)(slice_p request, slice_p response, struct tcp_client *client);
+typedef struct tcp_connection_t *(*tcp_connection_allocate_func)(void *app_data);
+typedef tcp_connection_status_t (*tcp_client_handler_func)(slice_p request, slice_p response, tcp_connection_p connection);
 
-typedef struct tcp_client {
+typedef struct tcp_connection_t {
     SOCKET sock_fd;
 
-    /* filled in by the application's allocator function */
-    tcp_client_handler_func handler;
-    volatile sig_atomic_t *terminate; /* need this in the thread and main loop */
+    /* need this in the thread and main loop */
+    volatile sig_atomic_t *terminate;
+
+    /* the following must be set up by the allocation function */
 
     /* data buffer for requests and responses */
     slice_t buffer;
-} tcp_client_t;
 
-typedef tcp_client_t *tcp_client_p;
+    /* filled in by the application's allocator function */
+    tcp_client_handler_func handler;
+} tcp_connection_t;
 
-extern void tcp_server_run(const char *host, const char *port, volatile sig_atomic_t *terminate, tcp_client_allocate_func allocator, void *app_data);
+typedef tcp_connection_t *tcp_connection_p;
+
+extern void tcp_server_run(const char *host, const char *port, volatile sig_atomic_t *terminate, tcp_connection_allocate_func allocator, void *app_data);

@@ -31,8 +31,6 @@
  *   59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.             *
  ***************************************************************************/
 
-#include "utils/compat.h"
-
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdint.h>
@@ -40,38 +38,27 @@
 #include <string.h>
 #include <time.h>
 
-#if defined(IS_WINDOWS)
-#include <Windows.h>
-#else
- /* assume it is POSIX of some sort... */
-#include <signal.h>
-#include <strings.h>
-#endif
+// #if defined(IS_WINDOWS)
+// #include <Windows.h>
+// #else
+//  /* assume it is POSIX of some sort... */
+// #include <signal.h>
+// #include <strings.h>
+// #endif
 
-#include "utils/debug.h"
 #include "eip.h"
 #include "plc.h"
+#include "arg_parser.h"
+#include "utils/compat.h"
+#include "utils/debug.h"
 #include "utils/slice.h"
 #include "utils/tcp_server.h"
 #include "utils/time_utils.h"
 
-/*
- * build on plc_connection_config
- */
-typedef struct {
-    tcp_client_t;
-    struct plc_connection_config conn_config;
-    plc_s *plc;
-} client_state_t;
-
-typedef client_state_t *client_state_p;
+static plc_connection_t template_plc_connection = {0};
 
 static void usage(void);
-// static void process_args(int argc, const char **argv, plc_s *plc);
-// static void parse_path(const char *path, plc_s *plc);
-// static void parse_pccc_tag(const char *tag, plc_s *plc);
-// static void parse_cip_tag(const char *tag, plc_s *plc);
-static int request_handler(tcp_client_p client);
+static tcp_connection_p allocate_client(void *template_connection_arg);
 
 
 #ifdef IS_WINDOWS
@@ -157,24 +144,20 @@ void setup_break_handler(void)
 
 int main(int argc, const char **argv)
 {
-    plc_s plc;
-    size_t buffer_size = 8192;
-
     /* set up handler for ^C etc. */
     setup_break_handler();
 
     debug_set_level(DEBUG_INFO);
 
-    /* clear out context to make sure we do not get gremlins */
-    memset(&plc, 0, sizeof(plc));
-
     /* set the random seed. */
-    srand((unsigned int)time(NULL));
+    srand((unsigned int)util_time_ms());
 
-    process_args(argc, argv, &plc);
+    if(!process_args(argc, argv, &template_plc_connection)) {
+        usage();
+    }
 
     /* open a server connection and listen on the right port. */
-    tcp_server_run("0.0.0.0", (plc.port_str ? plc.port_str : "44818"), request_handler, buffer_size, &plc, &done, NULL);
+    tcp_server_run("0.0.0.0", (template_plc_connection.port_str ? template_plc_connection.port_str : "44818"), &done, allocate_client, (void *)&template_plc_connection);
 
     return 0;
 }
@@ -220,47 +203,23 @@ void usage(void)
 }
 
 
-tcp_client_p allocate_client(void *plc_arg)
+tcp_connection_p allocate_client(void *template_connection_arg)
 {
-    plc_s *plc = (plc_s *)plc_arg;
-    client_state_p client = NULL;
+    plc_connection_p template_connection = (plc_connection_p)template_connection_arg;
+    size_t connection_state_size = sizeof(*template_connection);
+    plc_connection_p connection = NULL;
 
-    size_t client_state_size = sizeof(*client) + plc->default_conn_config.default_buffer_size;
+    connection = calloc(1, connection_state_size);
 
-    client = calloc(1, client_state_size);
+    assert_error((connection), "Unable to allocate new connection state!");
 
-    error_assert((client), "Unable to allocate new client state!");
+    /* copy the template data */
+    *connection = *template_connection;
 
-    client->buffer.start = (uint8_t *)(client + 1);
-    client->buffer.end = client->buffer.start + plc->default_conn_config.default_buffer_size;
-    client->handler = request_handler;
-    client->conn_config = plc->default_conn_config;
-    client->plc = plc;
+    /* fill in anything that changes */
+    connection->tcp_connection.buffer.start = &(connection->buffer_data);
+    connection->tcp_connection.buffer.end = &(connection->buffer_data) + MAX_DEVICE_BUFFER_SIZE;
+    connection->tcp_connection.handler = eip_dispatch_request;
 
-
-    return client;
-}
-
-/*
- * Process each request.  Dispatch to the correct
- * request type handler.
- */
-
-tcp_client_status_t request_handler(slice_p request, slice_p response, tcp_client_p client_arg)
-{
-    int rc = TCP_CLIENT_DONE;
-    client_state_p client = (client_state_p)client_arg;
-
-    /* dispatch the data */
-    rc = eip_dispatch_request(client);
-
-    /* if there is a response delay requested, then wait a bit. */
-    if(rc == TCP_CLIENT_PROCESSED) {
-        if(client->conn_config.response_delay > 0) {
-            util_sleep_ms(client->conn_config.response_delay);
-        }
-    }
-
-    /* we do not have a complete packet, get more data. */
-    return rc;
+    return (tcp_connection_p)connection;
 }

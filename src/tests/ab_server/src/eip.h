@@ -40,9 +40,18 @@
 /* EIP header size is 24 bytes. */
 #define EIP_HEADER_SIZE (24)
 
-/* EIP errors. */
-#define EIP_OK (0)
-#define EIP_ERR_BAD_REQUEST     ((uint32_t)1) /* FIXME */
 
+typedef struct {
+    uint16_t command;
+    uint16_t length;
+    uint32_t session_handle;
+    uint32_t status;
+    uint64_t sender_context;
+    uint32_t options;
 
-extern int eip_dispatch_request(tcp_client_p client);
+    int response_delay;
+} eip_connection_t;
+
+typedef eip_connection_t *eip_connection_p;
+
+extern plc_status_t eip_dispatch_request(slice_p request, slice_p response, tcp_connection_p connection_arg);

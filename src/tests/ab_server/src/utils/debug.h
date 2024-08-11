@@ -51,7 +51,7 @@ extern debug_level_t debug_get_level(void);
 
 extern void debug_impl(const char *func, int line, debug_level_t level, const char *templ, ...);
 
-#define error_assert(COND, ...) do { if(!(COND)) { debug_impl(__func__, __LINE__, DEBUG_ERROR, __VA_ARGS__); exit(1); } } while(0)
+#define assert_error(COND, ...) do { if(!(COND)) { debug_impl(__func__, __LINE__, DEBUG_ERROR, __VA_ARGS__); exit(1); } } while(0)
 #define warn(...) debug_impl(__func__, __LINE__, DEBUG_WARN, __VA_ARGS__)
 #define info(...) debug_impl(__func__, __LINE__, DEBUG_INFO, __VA_ARGS__)
 #define detail(...) debug_impl(__func__, __LINE__, DEBUG_DETAIL, __VA_ARGS__)

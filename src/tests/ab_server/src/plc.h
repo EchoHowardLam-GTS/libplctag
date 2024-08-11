@@ -35,6 +35,10 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include "cip.h"
+#include "cpf.h"
+#include "eip.h"
+#include "pccc.h"
 #include "utils/mutex_compat.h"
 
 
@@ -62,7 +66,7 @@ typedef uint16_t tag_type_t;
 #define TAG_PCCC_TYPE_REAL        ((uint8_t)0x8a) /* 32–bit floating point value, IEEE format */
 #define TAG_PCCC_TYPE_STRING      ((uint8_t)0x8d) /* 82-byte string with 2-byte count word. */
 
-struct tag_def_s {
+struct tag_def_t {
     struct tag_def_s *next_tag;
     char *name;
     mutex_t mutex; /* only one thread at a time can access. */
@@ -75,9 +79,10 @@ struct tag_def_s {
     uint8_t *data;
 };
 
-typedef struct tag_def_s tag_def_s;
+typedef struct tag_def_t tag_def_t;
+typedef struct tag_def_t *tag_def_p;
 
-typedef enum {
+typedef enum plc_type_t {
     PLC_CONTROL_LOGIX,
     PLC_MICRO800,
     PLC_OMRON,
@@ -86,45 +91,56 @@ typedef enum {
     PLC_MICROLOGIX
 } plc_type_t;
 
-struct plc_connection_config {
-    uint32_t session_handle;
-    uint64_t sender_context;
-    uint32_t server_connection_id;
-    uint16_t server_connection_seq;
-    uint32_t server_to_client_rpi;
-    uint32_t client_connection_id;
-    uint16_t client_connection_seq;
-    uint16_t client_connection_serial_number;
-    uint16_t client_vendor_id;
-    uint32_t client_serial_number;
-    uint32_t client_to_server_rpi;
 
-    uint32_t client_to_server_max_packet;
-    uint32_t server_to_client_max_packet;
+const uint32_t MAX_DEVICE_BUFFER_SIZE = (0x10000);
 
-    /* PCCC info */
-    uint16_t pccc_seq_id;
-
-    /* debugging. */
-    int reject_fo_count;
-
-    /* response delay */
-    int response_delay;
-
-    /* default buffer size */
-    uint32_t default_buffer_size;
-};
-
-/* Define the context that is passed around. */
 typedef struct {
-    plc_type_t plc_type;
-    const char* port_str;
-    uint8_t path[20];
-    uint8_t path_len;
+    struct tcp_connection_t tcp_connection;
 
-    /* list of tags served by this "PLC" */
-    struct tag_def_s *tags;
+    /* protocol-specific connection data */
+    eip_connection_t eip_connection;
+    cpf_connection_t cpf_connection;
+    cip_connection_t cip_connection;
+    pccc_connection_t pccc_connection;
 
-    /* connection info. defaults */
-    struct plc_connection_config default_conn_config;
-} plc_s;
+    /* PLC info we might need */
+    plc_connection_t plc_type;
+    const char *port_string;
+    tag_def_p tags;
+
+    /* a buffer for requests and responses */
+    uint8_t buffer_data[MAX_DEVICE_BUFFER_SIZE];
+} plc_connection_t;
+
+typedef plc_connection_t *plc_connection_p;
+
+typedef enum {
+    /* start off above the TCP connection status */
+    PLC_ERR_INSUFFICIENT_RESPONSE_DATA = TCP_CONNECTION_STATUS_LAST,
+    PLC_ERR_NOT_FOUND,
+} plc_status_t;
+
+
+#define assert_warn(COND, STATUS, ... ) if(!(COND)) {            \
+    debug_impl(__func__, __LINE__, DEBUG_WARN, __VA_ARGS__);    \
+    rc = (STATUS);                                              \
+    break;                                                      \
+} do {} while(0)
+
+#define assert_info(COND, STATUS, ... ) if(!(COND)) {            \
+    debug_impl(__func__, __LINE__, DEBUG_INFO, __VA_ARGS__);    \
+    rc = (STATUS);                                              \
+    break;                                                      \
+} do {} while(0)
+
+#define assert_detail(COND, STATUS, ... ) if(!(COND)) {          \
+    debug_impl(__func__, __LINE__, DEBUG_DETAIL, __VA_ARGS__);  \
+    rc = (STATUS);                                              \
+    break;                                                      \
+} do {} while(0)
+
+#define assert_flood(COND, STATUS, ... ) if(!(COND)) {          \
+    debug_impl(__func__, __LINE__, DEBUG_FLOOD, __VA_ARGS__);   \
+    rc = (STATUS);                                              \
+    break;                                                      \
+} do {} while(0)

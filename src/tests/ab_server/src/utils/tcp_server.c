@@ -44,21 +44,21 @@
 #include "time_utils.h"
 
 
-static tcp_client_p allocate_new_client(void *app_data);
-static THREAD_FUNC(tcp_client_connection_handler, raw_client_ptr);
+// static tcp_connection_p allocate_new_client(void *app_data);
+static THREAD_FUNC(tcp_client_connection_handler, connection_ptr_arg);
 
 
-void tcp_server_run(const char *host, const char *port, volatile sig_atomic_t *terminate, tcp_client_allocate_func allocator, void *app_data)
+void tcp_server_run(const char *host, const char *port, volatile sig_atomic_t *terminate, tcp_connection_allocate_func allocator, void *app_data)
 {
     socket_status_t sock_rc = SOCKET_STATUS_OK;
     int listen_fd;
     int client_fd;
-    tcp_client_p tcp_client = NULL;
+    tcp_connection_p tcp_client = NULL;
     thread_t client_thread;
 
     sock_rc = socket_open(host, port, &listen_fd);
 
-    error_assert((sock_rc == SOCKET_STATUS_OK), "Unable to open listener TCP socket, error code!");
+    assert_error((sock_rc == SOCKET_STATUS_OK), "Unable to open listener TCP socket, error code!");
 
     do {
         flood("Waiting for new client connections.");
@@ -66,9 +66,9 @@ void tcp_server_run(const char *host, const char *port, volatile sig_atomic_t *t
 
         if(sock_rc == SOCKET_STATUS_OK) {
             info("Allocating new TCP client.");
-            tcp_client = allocate_new_client(app_data);
+            tcp_client = allocator(app_data);
 
-            error_assert((tcp_client), "Unable to allocate memory for new client connection!");
+            assert_error((tcp_client), "Unable to allocate memory for new client connection!");
 
             tcp_client->sock_fd = client_fd;
             tcp_client->terminate = terminate;
@@ -77,7 +77,7 @@ void tcp_server_run(const char *host, const char *port, volatile sig_atomic_t *t
             info("Creating thread to handle the new connection.");
             thread_create(&client_thread, tcp_client_connection_handler, (thread_arg_t)tcp_client);
 
-            error_assert((client_thread != 0), "Unable to create client connection handler thread!");
+            assert_error((client_thread), "Unable to create client connection handler thread!");
         } /* else any other value than timeout and we'll drop out of the loop */
     } while(!*terminate && (sock_rc == SOCKET_STATUS_OK || sock_rc == SOCKET_ERR_TIMEOUT));
 
@@ -99,48 +99,53 @@ void tcp_server_run(const char *host, const char *port, volatile sig_atomic_t *t
 /******** Helpers *********/
 
 
-THREAD_FUNC(tcp_client_connection_handler, raw_client_ptr)
+THREAD_FUNC(tcp_client_connection_handler, connection_ptr_arg)
 {
-    tcp_client_status_t client_rc = TCP_CLIENT_PROCESSED;
+    tcp_connection_status_t conn_rc = TCP_CONNECTION_PROCESSED;
     socket_status_t sock_rc = SOCKET_STATUS_OK;
-    tcp_client_p client = (tcp_client_p)raw_client_ptr;
+    tcp_connection_p connection = (tcp_connection_p)connection_ptr_arg;
     slice_t request = {0};
     slice_t response = {0};
     slice_t remaining_buffer = {0};
 
     info("Got new client connection, going into processing loop.");
     do {
-        client_rc = TCP_CLIENT_PROCESSED;
+        conn_rc = TCP_CONNECTION_PROCESSED;
         sock_rc = SOCKET_STATUS_OK;
 
         /* reset the buffers */
-        request = client->buffer;
-        response = client->buffer;
+        request = connection->buffer;
+        response = connection->buffer;
         remaining_buffer = request;
 
         do {
             /* get an incoming packet or a partial packet. */
-            sock_rc = socket_read(client->sock_fd, &remaining_buffer, 100);
+            sock_rc = socket_read(connection->sock_fd, &remaining_buffer, 100);
 
             /* did we get data? */
             if(sock_rc == SOCKET_STATUS_OK) {
+                uint8_t *saved_start = response.start;
+
                 /* set the request end to the end of the new data */
                 request.end = remaining_buffer.start;
 
                 /* try to process the packet. */
-                client_rc = client->handler(&request, &response, client);
+                conn_rc = connection->handler(&request, &response, (void *)connection);
+
+                /* back up the start to where it was */
+                response.start = saved_start;
             }
-        } while(!*(client->terminate)
+        } while(!*(connection->terminate)
                 && (sock_rc == SOCKET_STATUS_OK || sock_rc == SOCKET_ERR_TIMEOUT)
-                && client_rc == TCP_CLIENT_INCOMPLETE
+                && conn_rc == TCP_CONNECTION_INCOMPLETE
                );
 
         /* check the response. */
-        if(client_rc == TCP_CLIENT_PROCESSED) {
+        if(conn_rc == TCP_CONNECTION_PROCESSED) {
             /* write out the response */
             do {
-                sock_rc = socket_write(client->sock_fd, &response, 100);
-            } while(!*(client->terminate)
+                sock_rc = socket_write(connection->sock_fd, &response, 100);
+            } while(!*(connection->terminate)
                     && (sock_rc == SOCKET_STATUS_OK || sock_rc == SOCKET_ERR_TIMEOUT)
                     && slice_len(&response) > 0
                    );
@@ -148,18 +153,18 @@ THREAD_FUNC(tcp_client_connection_handler, raw_client_ptr)
             if(slice_len(&response)) {
                 /* if we could not write the response, kill the connection. */
                 info("Unable to write full response!");
-                client_rc = TCP_CLIENT_DONE;
+                conn_rc = TCP_CONNECTION_DONE;
                 break;
             }
         }
-    } while(!*(client->terminate) && client_rc == TCP_CLIENT_PROCESSED);
+    } while(!*(connection->terminate) && conn_rc == TCP_CONNECTION_PROCESSED);
 
     info("TCP client connection thread is terminating.");
 
     /* done with the socket */
-    socket_close(client->sock_fd);
+    socket_close(connection->sock_fd);
 
-    free(client);
+    free(connection);
 
     THREAD_RETURN(0);
 }

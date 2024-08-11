@@ -37,8 +37,8 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <string.h>
-#include "utils/debug.h"
-#include "utils/slice.h"
+#include "debug.h"
+#include "slice.h"
 #include "util.h"
 
 
@@ -265,6 +265,61 @@ slice_status_t slice_unpack(slice_p data_slice, const char *fmt, ...)
 
     for(rc = SLICE_STATUS_OK; rc == SLICE_STATUS_OK && slice_len(&fmt_slice) && slice_len(&unprocessed_data_slice); fmt_slice.start++) {
         switch(*(char *)(fmt_slice.start)) {
+            case '0':
+            case '1':
+            case '2':
+            case '3':
+            case '4':
+            case '5':
+            case '6':
+            case '7':
+            case '8':
+            case '9':
+            case 'A':
+            case 'B':
+            case 'C':
+            case 'D':
+            case 'E':
+            case 'F': {
+                    /* insert or match byte value */
+                    char hex_digits[3] = {0};
+                    char *hex_end = NULL;
+                    uint8_t byte_value  = 0;
+
+                    if(slice_len(&fmt_slice) <= 1) {
+                        warn("Two hex digits are required for the terminating byte value!");
+                        rc = SLICE_ERR_INCOMPLETE_FORMAT;
+                        break;
+                    }
+
+                    hex_digits[0] = *(char *)(fmt_slice.start);
+                    fmt_slice.start++;
+                    hex_digits[1] = *(char *)(fmt_slice.start);
+                    hex_digits[2] = 0;
+
+                    if(!is_hex(hex_digits[0]) || !is_hex(hex_digits[1])) {
+                        warn("Expected two hex digits for the byte value but got \"%c%c\"!", hex_digits[0], hex_digits[1]);
+                        rc = SLICE_ERR_INCORRECT_FORMAT;
+                        break;
+                    }
+
+                    byte_value = (uint8_t)strtol(hex_digits, &hex_end, 16);
+
+                    if(hex_digits == hex_end) {
+                        warn("strtol() unable to process hex digits!");
+                        rc = SLICE_ERR_INCORRECT_FORMAT;
+                        break;
+                    }
+
+                    /* does the byte in the input buffer match the value here? */
+                    if(*(unprocessed_data_slice.start) != byte_value) {
+                        warn("Byte value 0x%02x did not match input data byte 0x%02x!", byte_value, *(unprocessed_data_slice.start));
+                        rc = SLICE_ERR_NOT_FOUND;
+                        break;
+                    }
+                }
+                break;
+
             case ',': break; /* ignore, used for visual separation in format string. */
 
             case '<':
@@ -469,6 +524,59 @@ slice_status_t slice_pack(slice_t *data_slice, const char *fmt, ...)
 
     for(rc = SLICE_STATUS_OK; rc == SLICE_STATUS_OK && slice_len(&fmt_slice) && slice_len(&unused_data_slice); fmt_slice.start++) {
         switch(*(char *)(fmt_slice.start)) {
+            case '0':
+            case '1':
+            case '2':
+            case '3':
+            case '4':
+            case '5':
+            case '6':
+            case '7':
+            case '8':
+            case '9':
+            case 'A':
+            case 'B':
+            case 'C':
+            case 'D':
+            case 'E':
+            case 'F': {
+                    /* insert or match byte value */
+                    char hex_digits[3] = {0};
+                    char *hex_end = NULL;
+                    uint8_t byte_value  = 0;
+
+                    if(slice_len(&fmt_slice) <= 1) {
+                        warn("Two hex digits are required for the terminating byte value!");
+                        rc = SLICE_ERR_INCOMPLETE_FORMAT;
+                        break;
+                    }
+
+                    hex_digits[0] = *(char *)(fmt_slice.start);
+                    fmt_slice.start++;
+                    hex_digits[1] = *(char *)(fmt_slice.start);
+                    hex_digits[2] = 0;
+
+                    if(!is_hex(hex_digits[0]) || !is_hex(hex_digits[1])) {
+                        warn("Expected two hex digits for the byte value but got \"%c%c\"!", hex_digits[0], hex_digits[1]);
+                        rc = SLICE_ERR_INCORRECT_FORMAT;
+                        break;
+                    }
+
+                    byte_value = (uint8_t)strtol(hex_digits, &hex_end, 16);
+
+                    if(hex_digits == hex_end) {
+                        warn("strtol() unable to process hex digits!");
+                        rc = SLICE_ERR_INCORRECT_FORMAT;
+                        break;
+                    }
+
+                    /* Insert the byte value */
+                    *(unused_data_slice.start) = byte_value;
+
+                    unused_data_slice.start++;
+                }
+                break;
+
             case ',': break; /* ignore, used for visual separation in format string. */
 
             case '<':
@@ -1642,7 +1750,7 @@ slice_status_t check_or_allocate(slice_p slice, uint32_t required_size)
             /* we'll assume that the slice is empty */
             slice->start = calloc(1, required_size);
 
-            error_assert((slice->start), "Unable to allocate memory for slice data buffer!");
+            assert_error((slice->start), "Unable to allocate memory for slice data buffer!");
 
             slice->end = slice->start + required_size;
 

@@ -33,6 +33,8 @@
 
 #pragma once
 
+#include <stdbool.h>
+#include "cip.h"
 #include "plc.h"
 
-extern void process_args(int argc, const char **argv, plc_s *plc);
+extern bool process_args(int argc, const char **argv, plc_connection_p template_connection);

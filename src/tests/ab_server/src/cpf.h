@@ -34,8 +34,71 @@
 #pragma once
 
 #include "utils/tcp_server.h"
-#include "plc.h"
 #include "utils/slice.h"
 
-extern int handle_cpf_unconnected(tcp_client_p client);
-extern int handle_cpf_connected(tcp_client_p client);
+// typedef struct {
+//     uint16_t addr_item_type;
+//     uint16_t addr_item_size;
+//     uint32_t connection_id;
+//     uint16_t data_item_type;
+//     uint16_t data_item_size;
+//     uint16_t connection_seq_num;
+// } cpf_header_connected;
+
+// typedef struct {
+//     uint16_t addr_item_type;
+//     uint16_t addr_item_size;
+//     uint16_t data_item_type;
+//     uint16_t data_item_size;
+// } cpf_header_unconnected;
+
+
+// typedef union {
+//     cpf_header_connected cpf_connected;
+//     cpf_header_unconnected cpf_unconnected;
+// } cpf_connection_t;
+
+// typedef cpf_connection_t *cpf_connection_p;
+
+
+typedef struct {
+    uint32_t interface_handle;
+    uint16_t router_timeout;
+    uint16_t item_count;
+    uint16_t item_addr_type;
+    uint16_t item_addr_length;
+    uint16_t item_data_type;
+    uint16_t item_data_length;
+} cpf_uc_header_t;
+
+#define CPF_UCONN_HEADER_SIZE (16)
+
+typedef struct {
+    uint32_t interface_handle;
+    uint16_t router_timeout;
+    uint16_t item_count;        /* should be 2 for now. */
+    uint16_t item_addr_type;
+    uint16_t item_addr_length;
+    uint32_t conn_id;
+    uint16_t item_data_type;
+    uint16_t item_data_length;
+    uint16_t conn_seq;
+} cpf_co_header_t;
+
+/* I wish we had variants/sum types! */
+typedef struct {
+    enum { CPF_CONNECTED, CPF_UNCONNECTED } cpf_type;
+    union {
+        cpf_uc_header_t uc_header;
+        cpf_co_header_t co_header;
+    };
+} cpf_connection_t;
+
+typedef cpf_connection_t *cpf_connection_p;
+
+
+#define CPF_CONN_HEADER_SIZE (22)
+
+
+extern tcp_connection_status_t cpf_dispatch_connected_request(slice_p request, slice_p response, tcp_connection_p connection_arg);
+extern tcp_connection_status_t cpf_dispatch_unconnected_request(slice_p request, slice_p response, tcp_connection_p connection_arg);
