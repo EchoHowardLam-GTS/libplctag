@@ -52,7 +52,7 @@
 /* supported EIP version */
 #define EIP_VERSION     ((uint16_t)1)
 
-static tcp_connection_status_t decode_eip_header(slice_p request, eip_header_p header);
+static tcp_connection_status_t decode_eip_header(slice_p request, eip_header_p header, slice_p header_slice, slice_p payload_slice);
 static tcp_connection_status_t encode_eip_header(slice_p response, eip_header_p header);
 static tcp_connection_status_t reserve_eip_header(slice_p response, eip_header_p header);
 
@@ -61,6 +61,7 @@ static tcp_connection_status_t reserve_eip_header(slice_p response, eip_header_p
 
 static tcp_connection_status_t register_session(slice_p request, slice_p parent_response, plc_connection_p connection_arg);
 static tcp_connection_status_t unregister_session(slice_p request, slice_p parent_response, plc_connection_p connection_arg);
+
 
 
 tcp_connection_status_t eip_dispatch_request(slice_p request, slice_p response, tcp_connection_p connection_arg)
@@ -81,12 +82,15 @@ tcp_connection_status_t eip_dispatch_request(slice_p request, slice_p response, 
 
         assert_detail((slice_len(request) >= EIP_HEADER_SIZE), TCP_CONNECTION_PDU_INCOMPLETE, "Not enough data for the EIP header.  Go get more.");
 
-        rc = decode_eip_header(request, &eip_header);
+        rc = decode_eip_header(request, &eip_header, &response_header_slice, &response_payload_slice);
 
         if(rc != TCP_CONNECTION_OK) {
             warn("Unable to decode the EIP header!");
             break;
         }
+
+        /* push the response end out to the full buffer. */
+        response_payload_slice.end = response->end;
 
         /* sanity checks */
         assert_detail((slice_len(request) > (uint32_t)(header.length + (uint32_t)EIP_HEADER_SIZE)),
@@ -101,31 +105,26 @@ tcp_connection_status_t eip_dispatch_request(slice_p request, slice_p response, 
                      connection->eip_connection.eip_header.session_handle
                     );
 
-        /* save the start of the current response and update the start for the next layer */
-        slice_rc = slice_split_by_offset(response, EIP_HEADER_SIZE, &response_header_slice, &response_payload_slice);
-
         /* dispatch the request */
         switch(connection->eip_connection.eip_header.command) {
             case EIP_REGISTER_SESSION:
-                rc = register_session(&eip_header.payload, &response_payload_slice, connection);
+                rc = register_session(request, &response_payload_slice, connection);
                 break;
-
-// GOT HERE.
 
             case EIP_UNREGISTER_SESSION:
                 rc = unregister_session(request, &response_payload_slice, connection);
                 break;
 
             case EIP_CONNECTED_SEND:
-                rc = cpf_dispatch_connected_request(request, response, connection);
+                rc = cpf_dispatch_connected_request(request, &response_payload_slice, connection);
                 break;
 
             case EIP_UNCONNECTED_SEND:
-                rc = cpf_dispatch_unconnected_request(request, response, connection);
+                rc = cpf_dispatch_unconnected_request(request, &response_payload_slice, connection);
                 break;
 
             default:
-                rc = PDU_ERR_UNSUPPORTED;
+                rc = PDU_ERR_NOT_RECOGNIZED;
                 break;
         }
 
@@ -238,7 +237,7 @@ tcp_connection_status_t unregister_session(slice_p request, slice_p parent_respo
 }
 
 
-tcp_connection_status_t decode_eip_header(slice_p request, eip_header_p header)
+tcp_connection_status_t decode_eip_header(slice_p request, eip_header_p header, slice_p header_slice, slice_p payload_slice)
 {
     tcp_connection_status_t rc = TCP_CONNECTION_PDU_STATUS_OK;
     slice_status_t slice_rc = SLICE_STATUS_OK;
@@ -251,17 +250,16 @@ tcp_connection_status_t decode_eip_header(slice_p request, eip_header_p header)
 
         memset(header, 0, sizeof(*header));
 
-        header->payload.end = request->end;
-
         /* unpack EIP header. */
-        slice_rc = slice_unpack(request, "u2,u2,u4,u4,u8,u4,^",
+        slice_rc = slice_unpack(request, "u2,u2,u4,u4,u8,u4,|",
                                 &header->command,
                                 &header->length,
                                 &header->session_handle,
                                 &header->status,
                                 &header->sender_context,
                                 &header->options,
-                                &header->payload.start
+                                header_slice,
+                                payload_slice
                             );
 
         assert_info((slice_rc != SLICE_ERR_TOO_LITTLE_DATA), PDU_ERR_INCOMPLETE, "Not enough data to unpack EIP header.");

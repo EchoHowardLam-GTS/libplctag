@@ -407,6 +407,18 @@ slice_status_t slice_unpack(slice_p data_slice, const char *fmt, ...)
                 }
                 break;
 
+            case '|': {
+                    slice_p first = va_arg(va, slice_p);
+                    slice_p second = va_arg(va, slice_p);
+
+                    first->start = data_slice->start;
+                    first->end = unprocessed_data_slice.start;
+
+                    second->start = unprocessed_data_slice.start;
+                    second->end = unprocessed_data_slice.end;
+                }
+                break;
+
             case 'a': {
                     /* skip field type char and point to alignment value */
                     fmt_slice.start++;
@@ -660,6 +672,18 @@ slice_status_t slice_pack(slice_t *data_slice, const char *fmt, ...)
                     } else {
                         rc = SLICE_ERR_NULL_PTR;
                     }
+                }
+                break;
+
+            case '|': {
+                    slice_p first = va_arg(va, slice_p);
+                    slice_p second = va_arg(va, slice_p);
+
+                    first->start = data_slice->start;
+                    first->end = unused_data_slice.start;
+
+                    second->start = unused_data_slice.start;
+                    second->end = unused_data_slice.end;
                 }
                 break;
 

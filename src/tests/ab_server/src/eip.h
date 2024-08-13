@@ -48,7 +48,6 @@ typedef struct {
     uint32_t status;
     uint64_t sender_context;
     uint32_t options;
-    slice_t payload;
 } eip_header_t;
 
 typedef eip_header_t *eip_header_p;
