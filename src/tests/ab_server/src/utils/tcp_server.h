@@ -39,18 +39,78 @@
 
 
 typedef enum {
-    TCP_CONNECTION_PROCESSED = 1001,
-    TCP_CONNECTION_DONE,
-    TCP_CONNECTION_INCOMPLETE,
-    TCP_CONNECTION_BAD_REQUEST,
-    TCP_CONNECTION_UNSUPPORTED,
+    /* TCP connection set ready/has no error. */
+    TCP_CONNECTION_OK,
 
-    TCP_CONNECTION_STATUS_LAST,
+    /* The client connection is finished and we should close the TCP socket. */
+    TCP_CONNECTION_CLOSE,
+
+    /* Error opening TCP connection. */
+    TCP_CONNECTION_ERR_OPEN,
+
+    /* Error binding TCP socket. */
+    TCP_CONNECTION_ERR_BIND,
+
+    /* Error listening on TCP socket. */
+    TCP_CONNECTION_ERR_LISTEN,
+
+    /* Error accepting new client connection on TCP socket. */
+    TCP_CONNECTION_ERR_ACCEPT,
+
+    /* Error reading PDU from TCP connection */
+    TCP_CONNECTION_ERR_READ,
+
+    /* Error writing PDU response to TCP connection */
+    TCP_CONNECTION_ERR_WRITE,
+
+    /* PDU status/errors */
+
+    /* Request fully processed */
+    TCP_CONNECTION_PDU_STATUS_OK = 100,
+
+    /* not enough infomation was read for a full PDU. */
+    TCP_CONNECTION_PDU_INCOMPLETE,
+
+    /* The request had something wrong with it. */
+    TCP_CONNECTION_PDU_ERR_MALFORMED,
+
+    /* make any other status start here or above. */
+    TCP_CONNECTION_STATUS_LAST = 200,
 } tcp_connection_status_t;
+
+typedef enum {
+    /* PDU correctly processed. */
+    PDU_STATUS_OK = TCP_CONNECTION_PDU_STATUS_OK,
+
+    /* PDU request incomplete/needs more data. */
+    PDU_ERR_INCOMPLETE = TCP_CONNECTION_PDU_INCOMPLETE,
+
+    /* Internal error processing PDU */
+    PDU_ERR_INTERNAL = TCP_CONNECTION_STATUS_LAST,
+
+    /* PDU has incorrect/illegal parameter value. */
+    PDU_ERR_BAD_PARAM,
+
+    /* PDU was malformed in some way. */
+    PDU_ERR_MALFORMED,
+
+    /* PDU was recognized by not supported. */
+    PDU_ERR_NOT_SUPPORTED,
+
+    /* PDU was not recognized. */
+    PDU_ERR_NOT_RECOGNIZED,
+
+    /* Requested entity not found. */
+    PDU_ERR_NOT_FOUND,
+
+    /* Response buffer not large enough for response. */
+    PDU_ERR_NO_SPACE,
+
+} pdu_status_t;
 
 
 typedef struct tcp_connection_t *(*tcp_connection_allocate_func)(void *app_data);
-typedef tcp_connection_status_t (*tcp_client_handler_func)(slice_p request, slice_p response, tcp_connection_p connection);
+typedef tcp_connection_status_t (*tcp_client_handler_func)(slice_p request, slice_p response, struct tcp_connection_t *connection);
 
 typedef struct tcp_connection_t {
     SOCKET sock_fd;
@@ -68,5 +128,7 @@ typedef struct tcp_connection_t {
 } tcp_connection_t;
 
 typedef tcp_connection_t *tcp_connection_p;
+
+
 
 extern void tcp_server_run(const char *host, const char *port, volatile sig_atomic_t *terminate, tcp_connection_allocate_func allocator, void *app_data);

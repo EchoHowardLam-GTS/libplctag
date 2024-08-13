@@ -99,9 +99,31 @@ static inline uint32_t slice_len(slice_p slice)
     return 0;
 }
 
+extern slice_status_t slice_split_by_ptr(slice_p source, uint8_t split_point, slice_p first, slice_p second);
+
+
+static inline slice_status_t slice_split_by_offset(slice_p source, uint32_t offset, slice_p first, slice_p second)
+{
+    slice_status_t rc = SLICE_STATUS_OK;
+
+    do {
+        uint8_t *split_point = NULL;
+
+        if(!source) {
+            rc = SLICE_ERR_NULL_PTR;
+            break;
+        }
+
+        split_point = source->start + offset;
+
+        rc = slice_split_by_ptr(source, split_point, first, second);
+    } while(0);
+
+    return rc;
+}
+
 extern slice_status_t slice_to_string(slice_p slice, char *result, uint32_t result_size, bool word_swap);
 extern slice_status_t string_to_slice(const char *source, slice_p dest, bool word_swap);
-
 extern slice_status_t slice_from_slice(slice_p parent, slice_p new_slice, uint8_t *start, uint8_t *end);
 
 

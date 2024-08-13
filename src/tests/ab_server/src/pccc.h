@@ -52,4 +52,4 @@ typedef struct {
 
 typedef pccc_connection_t *pccc_connection_p;
 
-extern plc_status_t dispatch_pccc_request(slice_p request, slice_p response, tcp_connection_p connection_arg);
+extern tcp_connection_status_t dispatch_pccc_request(slice_p request, slice_p response, tcp_connection_p connection_arg);

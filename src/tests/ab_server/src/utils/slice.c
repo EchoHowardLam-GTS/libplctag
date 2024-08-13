@@ -58,6 +58,50 @@ static slice_status_t check_or_allocate(slice_p slice, uint32_t required_size);
 uint32_t *get_byte_order(size_t size, bool little_endian, bool word_swap);
 
 
+
+slice_status_t slice_split_by_ptr(slice_p source, uint8_t split_point, slice_p first, slice_p second)
+{
+    slice_status_t rc = SLICE_STATUS_OK;
+
+    do {
+        if(!source) {
+            rc = SLICE_ERR_NULL_PTR;
+            break;
+        }
+
+        if(!split_point) {
+            rc = SLICE_ERR_NULL_PTR;
+            break;
+        }
+
+        if(!first) {
+            rc = SLICE_ERR_NULL_PTR;
+            break;
+        }
+
+        if(!second) {
+            rc = SLICE_ERR_NULL_PTR;
+            break;
+        }
+
+        if(! slice_contains(source, split_point)) {
+            rc = SLICE_ERR_OUT_OF_BOUNDS;
+            break;
+        }
+
+        first->start = source->start;
+        first->end = split_point;
+
+        second->start = split_point;
+        second->end = source->end;
+    } while(0);
+
+    return rc;
+}
+
+
+
+
 slice_status_t slice_to_string(slice_p slice, char *result, uint32_t result_size, bool byte_swap)
 {
     slice_status_t rc = SLICE_STATUS_OK;

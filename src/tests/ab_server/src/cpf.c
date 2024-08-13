@@ -49,7 +49,7 @@
 
 tcp_connection_status_t cpf_dispatch_connected_request(slice_p request, slice_p response, tcp_connection_p connection_arg)
 {
-    tcp_connection_status_t conn_rc = TCP_CONNECTION_PROCESSED;
+    tcp_connection_status_t conn_rc = TCP_CONNECTION_PDU_STATUS_OK;
     plc_connection_p connection = (plc_connection_p)connection_arg;
     slice_status_t slice_rc;
     uint8_t *saved_start = response->start;
@@ -58,7 +58,7 @@ tcp_connection_status_t cpf_dispatch_connected_request(slice_p request, slice_p 
 
     do {
         /* we must have some sort of payload. */
-        assert_warn((slice_len(request) >= CPF_CONN_HEADER_SIZE), TCP_CONNECTION_INCOMPLETE, "Unusable size of connected CPF packet!");
+        assert_warn((slice_len(request) >= CPF_CONN_HEADER_SIZE), TCP_CONNECTION_PDU_INCOMPLETE, "Unusable size of connected CPF packet!");
 
         /*
             uint32_t interface_handle;
@@ -87,17 +87,17 @@ tcp_connection_status_t cpf_dispatch_connected_request(slice_p request, slice_p 
 
         assert_error((slice_rc == SLICE_STATUS_OK), "Error unpacking slice %d!", slice_rc);
 
-        assert_warn((connection->cpf_connection.co_header.item_count == (uint16_t)2), TCP_CONNECTION_BAD_REQUEST, "Malformed connected CPF packet, expected two CPF itemas but got %u!", connection->cpf_connection.co_header.item_count);
+        assert_warn((connection->cpf_connection.co_header.item_count == (uint16_t)2), TCP_CONNECTION_PDU_ERR_MALFORMED, "Malformed connected CPF packet, expected two CPF itemas but got %u!", connection->cpf_connection.co_header.item_count);
 
-        assert_warn((connection->cpf_connection.co_header.item_addr_type == CPF_ITEM_CAI), TCP_CONNECTION_BAD_REQUEST, "Unsupported connected CPF packet, expected connected address item type but got %u!", connection->cpf_connection.co_header.item_addr_type);
+        assert_warn((connection->cpf_connection.co_header.item_addr_type == CPF_ITEM_CAI), TCP_CONNECTION_PDU_ERR_MALFORMED, "Unsupported connected CPF packet, expected connected address item type but got %u!", connection->cpf_connection.co_header.item_addr_type);
 
-        assert_warn((connection->cpf_connection.co_header.item_addr_size == 0x04), TCP_CONNECTION_BAD_REQUEST, "Unsupported connected CPF packet, expected connected address item length of 4 but got %u!", connection->cpf_connection.co_header.item_addr_length);
+        assert_warn((connection->cpf_connection.co_header.item_addr_size == 0x04), TCP_CONNECTION_PDU_ERR_MALFORMED, "Unsupported connected CPF packet, expected connected address item length of 4 but got %u!", connection->cpf_connection.co_header.item_addr_length);
 
-        assert_warn((connection->cpf_connection.co_header.item_data_type == CPF_ITEM_CDI), TCP_CONNECTION_BAD_REQUEST, "Unsupported connected CPF packet, expected connected address item type but got %u!", connection->cpf_connection.co_header.item_addr_type);
+        assert_warn((connection->cpf_connection.co_header.item_data_type == CPF_ITEM_CDI), TCP_CONNECTION_PDU_ERR_MALFORMED, "Unsupported connected CPF packet, expected connected address item type but got %u!", connection->cpf_connection.co_header.item_addr_type);
 
-        assert_warn((connection->cpf_connection.co_header.conn_id == connection->cip_connection.server_connection_id), TCP_CONNECTION_BAD_REQUEST, "Expected connection ID %04x but found connection ID %04x!", connection->cip_connection.server_connection_id, connection->cpf_connection.co_header.conn_id);
+        assert_warn((connection->cpf_connection.co_header.conn_id == connection->cip_connection.server_connection_id), TCP_CONNECTION_PDU_ERR_MALFORMED, "Expected connection ID %04x but found connection ID %04x!", connection->cip_connection.server_connection_id, connection->cpf_connection.co_header.conn_id);
 
-        assert_warn((connection->cpf_connection.co_header.item_data_length == (uint16_t)(request->end - cip_start)), TCP_CONNECTION_BAD_REQUEST, "CPF payload length, %d, does not match passed length, %d!", (buf_len(request) - cip_start_offset), connection->cpf_connection.co_header.item_data_length);
+        assert_warn((connection->cpf_connection.co_header.item_data_length == (uint16_t)(request->end - cip_start)), TCP_CONNECTION_PDU_ERR_MALFORMED, "CPF payload length, %d, does not match passed length, %d!", (buf_len(request) - cip_start_offset), connection->cpf_connection.co_header.item_data_length);
 
         /* set up response. */
         saved_start = response->start;
@@ -107,7 +107,7 @@ tcp_connection_status_t cpf_dispatch_connected_request(slice_p request, slice_p 
 
         payload_size = (uint16_t)(response->end - cip_start);
 
-        assert_warn((conn_rc != TCP_CONNECTION_PROCESSED), TCP_CONNECTION_BAD_REQUEST, "CIP layer processing failed!");
+        assert_warn((conn_rc != TCP_CONNECTION_PDU_STATUS_OK), TCP_CONNECTION_PDU_ERR_MALFORMED, "CIP layer processing failed!");
 
         /* reset the response start to where it was. */
         response->start = saved_start;
@@ -137,7 +137,7 @@ tcp_connection_status_t cpf_dispatch_connected_request(slice_p request, slice_p 
 
 int cpf_dispatch_unconnected_request(slice_p request, slice_p response, tcp_connection_p connection_arg)
 {
-    tcp_connection_status_t conn_rc = TCP_CONNECTION_PROCESSED;
+    tcp_connection_status_t conn_rc = TCP_CONNECTION_PDU_STATUS_OK;
     slice_status_t slice_rc = SLICE_STATUS_OK;
     plc_connection_p connection = (plc_connection_p)connection_arg;
     uint8_t *saved_start = NULL;
@@ -148,7 +148,7 @@ int cpf_dispatch_unconnected_request(slice_p request, slice_p response, tcp_conn
 
     do {
         /* we must have some sort of payload. */
-        assert_warn((slice_len(request) >= CPF_UCONN_HEADER_SIZE), TCP_CONNECTION_INCOMPLETE, "Unusable size of connected CPF packet!");
+        assert_warn((slice_len(request) >= CPF_UCONN_HEADER_SIZE), TCP_CONNECTION_PDU_INCOMPLETE, "Unusable size of connected CPF packet!");
 
         /*
             uint32_t interface_handle;
@@ -172,13 +172,13 @@ int cpf_dispatch_unconnected_request(slice_p request, slice_p response, tcp_conn
 
         assert_error((slice_rc == SLICE_STATUS_OK), "Error unpacking slice %d!", slice_rc);
 
-        assert_warn((connection->cpf_connection.uc_header.item_count == (uint16_t)2), TCP_CONNECTION_BAD_REQUEST, "Malformed connected CPF packet, expected two CPF itemas but got %u!", connection->cpf_connection.co_header.item_count);
+        assert_warn((connection->cpf_connection.uc_header.item_count == (uint16_t)2), TCP_CONNECTION_PDU_ERR_MALFORMED, "Malformed connected CPF packet, expected two CPF itemas but got %u!", connection->cpf_connection.co_header.item_count);
 
-        assert_warn((connection->cpf_connection.uc_header.item_addr_type == CPF_ITEM_NAI), TCP_CONNECTION_BAD_REQUEST, "Unsupported connected CPF packet, expected connected address item type but got %u!", connection->cpf_connection.co_header.item_addr_type);
+        assert_warn((connection->cpf_connection.uc_header.item_addr_type == CPF_ITEM_NAI), TCP_CONNECTION_PDU_ERR_MALFORMED, "Unsupported connected CPF packet, expected connected address item type but got %u!", connection->cpf_connection.co_header.item_addr_type);
 
-        assert_warn((connection->cpf_connection.uc_header.item_data_type == CPF_ITEM_UDI), TCP_CONNECTION_BAD_REQUEST, "Unsupported connected CPF packet, expected connected address item type but got %u!", connection->cpf_connection.co_header.item_addr_type);
+        assert_warn((connection->cpf_connection.uc_header.item_data_type == CPF_ITEM_UDI), TCP_CONNECTION_PDU_ERR_MALFORMED, "Unsupported connected CPF packet, expected connected address item type but got %u!", connection->cpf_connection.co_header.item_addr_type);
 
-        assert_warn((connection->cpf_connection.uc_header.item_data_length == (uint16_t)(request->end - cip_start)), TCP_CONNECTION_BAD_REQUEST, "CPF payload length, %d, does not match passed length, %d!", (buf_len(request) - cip_start_offset), connection->cpf_connection.co_header.item_data_length);
+        assert_warn((connection->cpf_connection.uc_header.item_data_length == (uint16_t)(request->end - cip_start)), TCP_CONNECTION_PDU_ERR_MALFORMED, "CPF payload length, %d, does not match passed length, %d!", (buf_len(request) - cip_start_offset), connection->cpf_connection.co_header.item_data_length);
 
         /* set up response. */
         saved_start = response->start;
@@ -186,7 +186,7 @@ int cpf_dispatch_unconnected_request(slice_p request, slice_p response, tcp_conn
 
         conn_rc = cip_dispatch_request(request, response, connection_arg);
 
-        assert_warn((conn_rc != TCP_CONNECTION_PROCESSED), TCP_CONNECTION_BAD_REQUEST, "CIP layer processing failed!");
+        assert_warn((conn_rc != TCP_CONNECTION_PDU_STATUS_OK), TCP_CONNECTION_PDU_ERR_MALFORMED, "CIP layer processing failed!");
 
         payload_size = (uint16_t)slice_len(response);
 

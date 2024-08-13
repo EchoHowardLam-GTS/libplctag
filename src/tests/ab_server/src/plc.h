@@ -67,7 +67,7 @@ typedef uint16_t tag_type_t;
 #define TAG_PCCC_TYPE_STRING      ((uint8_t)0x8d) /* 82-byte string with 2-byte count word. */
 
 struct tag_def_t {
-    struct tag_def_s *next_tag;
+    struct tag_def_t *next_tag;
     char *name;
     mutex_t mutex; /* only one thread at a time can access. */
     tag_type_t tag_type;
@@ -104,7 +104,7 @@ typedef struct {
     pccc_connection_t pccc_connection;
 
     /* PLC info we might need */
-    plc_connection_t plc_type;
+    plc_type_t plc_type;
     const char *port_string;
     tag_def_p tags;
 

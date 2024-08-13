@@ -101,7 +101,7 @@ void tcp_server_run(const char *host, const char *port, volatile sig_atomic_t *t
 
 THREAD_FUNC(tcp_client_connection_handler, connection_ptr_arg)
 {
-    tcp_connection_status_t conn_rc = TCP_CONNECTION_PROCESSED;
+    tcp_connection_status_t conn_rc = TCP_CONNECTION_PDU_STATUS_OK;
     socket_status_t sock_rc = SOCKET_STATUS_OK;
     tcp_connection_p connection = (tcp_connection_p)connection_ptr_arg;
     slice_t request = {0};
@@ -110,7 +110,7 @@ THREAD_FUNC(tcp_client_connection_handler, connection_ptr_arg)
 
     info("Got new client connection, going into processing loop.");
     do {
-        conn_rc = TCP_CONNECTION_PROCESSED;
+        conn_rc = TCP_CONNECTION_PDU_STATUS_OK;
         sock_rc = SOCKET_STATUS_OK;
 
         /* reset the buffers */
@@ -137,11 +137,11 @@ THREAD_FUNC(tcp_client_connection_handler, connection_ptr_arg)
             }
         } while(!*(connection->terminate)
                 && (sock_rc == SOCKET_STATUS_OK || sock_rc == SOCKET_ERR_TIMEOUT)
-                && conn_rc == TCP_CONNECTION_INCOMPLETE
+                && conn_rc == TCP_CONNECTION_PDU_INCOMPLETE
                );
 
         /* check the response. */
-        if(conn_rc == TCP_CONNECTION_PROCESSED) {
+        if(conn_rc == TCP_CONNECTION_PDU_STATUS_OK) {
             /* write out the response */
             do {
                 sock_rc = socket_write(connection->sock_fd, &response, 100);
@@ -153,11 +153,11 @@ THREAD_FUNC(tcp_client_connection_handler, connection_ptr_arg)
             if(slice_len(&response)) {
                 /* if we could not write the response, kill the connection. */
                 info("Unable to write full response!");
-                conn_rc = TCP_CONNECTION_DONE;
+                conn_rc = TCP_CONNECTION_CLOSE;
                 break;
             }
         }
-    } while(!*(connection->terminate) && conn_rc == TCP_CONNECTION_PROCESSED);
+    } while(!*(connection->terminate) && conn_rc == TCP_CONNECTION_PDU_STATUS_OK);
 
     info("TCP client connection thread is terminating.");
 

@@ -35,31 +35,46 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include "cip.h"
-#include "utils/debug.h"
 #include "eip.h"
 #include "pccc.h"
 #include "plc.h"
+#include "utils/debug.h"
 #include "utils/slice.h"
 #include "utils/tcp_server.h"
 #include "utils/time_utils.h"
 
 
-/* tag commands */
-const uint8_t CIP_MULTI[] = { 0x0A, 0x02, 0x20, 0x02, 0x24, 0x01 };
-const uint8_t CIP_READ[] = { 0x4C };
-const uint8_t CIP_WRITE[] = { 0x4D };
-const uint8_t CIP_RMW[] = { 0x4E, 0x02, 0x20, 0x02, 0x24, 0x01 };
-const uint8_t CIP_READ_FRAG[] = { 0x52 };
-const uint8_t CIP_WRITE_FRAG[] = { 0x53 };
+// /* tag commands */
+// const uint8_t CIP_MULTI[] = { 0x0A, 0x02, 0x20, 0x02, 0x24, 0x01 };
+// const uint8_t CIP_READ[] = { 0x4C };
+// const uint8_t CIP_WRITE[] = { 0x4D };
+// const uint8_t CIP_RMW[] = { 0x4E, 0x02, 0x20, 0x02, 0x24, 0x01 };
+// const uint8_t CIP_READ_FRAG[] = { 0x52 };
+// const uint8_t CIP_WRITE_FRAG[] = { 0x53 };
 
 
-/* non-tag commands */
-//4b 02 20 67 24 01 07 3d f3 45 43 50 21
-const uint8_t CIP_PCCC_EXECUTE[] = { 0x4B, 0x02, 0x20, 0x67, 0x24, 0x01, 0x07, 0x3d, 0xf3, 0x45, 0x43, 0x50, 0x21 };
-const uint8_t CIP_FORWARD_CLOSE[] = { 0x4E, 0x02, 0x20, 0x06, 0x24, 0x01 };
-const uint8_t CIP_FORWARD_OPEN[] = { 0x54, 0x02, 0x20, 0x06, 0x24, 0x01 };
-const uint8_t CIP_LIST_TAGS[] = { 0x55, 0x02, 0x20, 0x02, 0x24, 0x01 };
-const uint8_t CIP_FORWARD_OPEN_EX[] = { 0x5B, 0x02, 0x20, 0x06, 0x24, 0x01 };
+// /* non-tag commands */
+// //4b 02 20 67 24 01 07 3d f3 45 43 50 21
+// const uint8_t CIP_PCCC_EXECUTE[] = { 0x4B, 0x02, 0x20, 0x67, 0x24, 0x01, 0x07, 0x3d, 0xf3, 0x45, 0x43, 0x50, 0x21 };
+// const uint8_t CIP_FORWARD_CLOSE[] = { 0x4E, 0x02, 0x20, 0x06, 0x24, 0x01 };
+// const uint8_t CIP_FORWARD_OPEN[] = { 0x54, 0x02, 0x20, 0x06, 0x24, 0x01 };
+// const uint8_t CIP_LIST_TAGS[] = { 0x55, 0x02, 0x20, 0x02, 0x24, 0x01 };
+// const uint8_t CIP_FORWARD_OPEN_EX[] = { 0x5B, 0x02, 0x20, 0x06, 0x24, 0x01 };
+
+
+typedef enum {
+    CIP_SERVICE_MULTI_REQUEST = 0x0A,
+    CIP_SERVICE_PCCC_EXECUTE = 0x4B,
+    CIP_SERVICE_READ_TAG = 0x4C,
+    CIP_SERVICE_WRITE_TAG = 0x4D,
+    CIP_SERVICE_FORWARD_CLOSE = 0x4E, /* DUPE !*/
+    CIP_SERVICE_RMW_TAG = 0x4E,  /* DUPE ! */
+    CIP_SERVICE_READ_TAG_FRAG = 0x52,
+    CIP_SERVICE_WRITE_TAG_FRAG = 0x53,
+    CIP_SERVICE_FORWARD_OPEN = 0x54,
+    CIP_SERVICE_FORWARD_OPEN_EX = 0x5B,
+    CIP_SERVICE_LIST_TAG_ATTRIBS = 0x55,
+} cip_service_type_t;
 
 /* path to match. */
 // uint8_t LOGIX_CONN_PATH[] = { 0x03, 0x00, 0x00, 0x20, 0x02, 0x24, 0x01 };
@@ -75,72 +90,87 @@ typedef struct {
     slice_t path;           /* store this in a slice to avoid copying */
 } cip_header_s;
 
-static int handle_forward_open(tcp_connection_p connection);
-static int handle_forward_close(tcp_connection_p connection);
-static int handle_read_request(tcp_connection_p connection);
-static int handle_write_request(tcp_connection_p connection);
+static tcp_connection_status_t process_forward_open(slice_p request, slice_p response, plc_connection_p connection);
+static tcp_connection_status_t process_forward_close(slice_p request, slice_p response, plc_connection_p connection);
+static tcp_connection_status_t process_tag_read_request(slice_p request, slice_p response, plc_connection_p connection);
+static tcp_connection_status_t process_tag_write_request(slice_p request, slice_p response, plc_connection_p connection);
 
-static int process_tag_segment(tcp_connection_p connection, tag_def_s **tag);
-static int process_tag_dim_index(slice_p tag_path, tag_def_s *tag);
+static int process_tag_segment(tcp_connection_p connection, tag_def_t **tag);
+static int process_tag_dim_index(slice_p tag_path, tag_def_t *tag);
 static bool make_cip_error(slice_p response, uint8_t cip_cmd, uint8_t cip_err, bool extend, uint16_t extended_error);
 static int match_path(slice_p request, bool need_pad, uint8_t *path, uint8_t path_len);
 
 
 
 
-int cip_dispatch_request(tcp_connection_p connection)
+tcp_connection_status_t cip_dispatch_request(slice_p request, slice_p response, tcp_connection_p connection_arg)
 {
-    int rc = CIP_OK;
-    slice_p request = &(client->request);
-    slice_p response = &(client->response);
+    tcp_connection_status_t conn_rc = PDU_STATUS_OK;
+    slice_status_t slice_rc = SLICE_STATUS_OK;
+    plc_connection_p connection = (plc_connection_p)connection_arg;
+    uint8_t cip_service = 0;
+    uint8_t *saved_request_start = NULL;
+    uint8_t *saved_response_start = NULL;
 
     info("Got packet:");
-    debug_dump_buf(request->start, request->end);
+    debug_dump_buf(DEBUG_INFO, request->start, request->end);
 
-    /* match the prefix and dispatch. */
-    if(buf_match_bytes(request, CIP_READ, sizeof(CIP_READ))) {
-        info("Case CIP_READ");
-        rc = handle_read_request(client);
-    } else if(buf_match_bytes(request, CIP_READ_FRAG, sizeof(CIP_READ_FRAG))) {
-        info("Case CIP_READ_FRAG");
-        rc = handle_read_request(client);
-    } else if(buf_match_bytes(request, CIP_WRITE, sizeof(CIP_WRITE))) {
-        info("Case CIP_WRITE");
-        rc = handle_write_request(client);
-    } else if(buf_match_bytes(request, CIP_WRITE_FRAG, sizeof(CIP_WRITE_FRAG))) {
-        info("Case CIP_WRITE_FRAG");
-        rc = handle_write_request(client);
-    } else if(buf_match_bytes(request, CIP_FORWARD_OPEN, sizeof(CIP_FORWARD_OPEN))) {
-        info("Case CIP_FORWARD_OPEN");
-        rc = handle_forward_open(client);
-    } else if(buf_match_bytes(request, CIP_FORWARD_OPEN_EX, sizeof(CIP_FORWARD_OPEN_EX))) {
-        info("Case CIP_FORWARD_OPEN_EX");
-        rc = handle_forward_open(client);
-    } else if(buf_match_bytes(request, CIP_FORWARD_CLOSE, sizeof(CIP_FORWARD_CLOSE))) {
-        info("Case CIP_FORWARD_CLOSE");
-        rc = handle_forward_close(client);
-    } else if(buf_match_bytes(request, CIP_PCCC_EXECUTE, sizeof(CIP_PCCC_EXECUTE))) {
-        info("Case CIP_PCCC_EXECUTE");
-        rc = dispatch_pccc_request(client);
-    } else {
-        info("Case NOT EXPECTED!");
-            make_cip_error(response, (uint8_t)(buf_get_uint8(request) | (uint8_t)CIP_DONE), (uint8_t)CIP_ERR_UNSUPPORTED, false, (uint16_t)0);
-            rc = CIP_ERR_UNSUPPORTED;
-    }
+    do {
+        /* save the start of the request for later */
+        saved_request_start = request->start;
 
-    if(rc != CIP_OK) {
-        info("WARN: Error handling CIP request!");
-    }
+        slice_rc = slice_unpack(request, "&u1", &cip_service);
 
-    /* cap off the response */
-    buf_cap_end(response);
+        assert_info((slice_rc != SLICE_ERR_TOO_LITTLE_DATA), PDU_ERR_INCOMPLETE, "Insufficient data to unpack PDU.");
 
-    return CIP_OK;
+        assert_warn((slice_rc == SLICE_STATUS_OK), PDU_ERR_INTERNAL, "Unable to unpack request slice!");
+
+        /* some of the services need the service */
+        request->start = saved_request_start;
+
+        /* store the response start for later. */
+        saved_response_start = response->start;
+
+        switch(cip_service) {
+            case CIP_SERVICE_MULTI_REQUEST: conn_rc = PDU_ERR_NOT_SUPPORTED; break;
+
+            case CIP_SERVICE_PCCC_EXECUTE: conn_rc = PDU_ERR_NOT_SUPPORTED; break;
+
+            case CIP_SERVICE_READ_TAG: conn_rc = process_tag_read_request(request, response, connection_arg); break;
+
+            case CIP_SERVICE_WRITE_TAG: conn_rc = PDU_ERR_NOT_SUPPORTED; break;
+
+            case CIP_SERVICE_FORWARD_CLOSE:     /* DUPE !*/
+
+
+            // case CIP_SERVICE_RMW_TAG:        /* DUPE ! */
+
+            case CIP_SERVICE_READ_TAG_FRAG:
+
+            case CIP_SERVICE_WRITE_TAG_FRAG: conn_rc = PDU_ERR_NOT_SUPPORTED; break;
+
+            case CIP_SERVICE_FORWARD_OPEN:
+
+            case CIP_SERVICE_FORWARD_OPEN_EX:
+
+            case CIP_SERVICE_LIST_TAG_ATTRIBS: conn_rc = PDU_ERR_NOT_SUPPORTED; break;
+
+            default: conn_rc = PDU_ERR_NOT_RECOGNIZED; break;
+        }
+
+        /* reset the response start to the position it was in when we were called. */
+        if(conn_rc == PDU_STATUS_OK) {
+            response->start = saved_response_start;
+        }
+    } while(0);
+
+    return conn_rc;
 }
 
 
 /* a handy structure to hold all the parameters we need to receive in a Forward Open request. */
 typedef struct {
+    uint8_t forward_open_service;
     uint8_t secs_per_tick;                  /* seconds per tick */
     uint8_t timeout_ticks;                  /* timeout = srd_secs_per_tick * src_timeout_ticks */
     uint32_t server_conn_id;                /* 0, returned by server in reply. */
@@ -151,141 +181,132 @@ typedef struct {
     uint8_t conn_timeout_multiplier;        /* timeout = mult * RPI */
     uint8_t reserved[3];                    /* reserved, set to 0 */
     uint32_t client_to_server_rpi;          /* us to target RPI - Request Packet Interval in microseconds */
-    uint32_t client_to_server_conn_params;  /* some sort of identifier of what kind of PLC we are??? */
+    uint32_t client_to_server_conn_params;  /* PDU size from client to us, plus other flags */
     uint32_t server_to_client_rpi;          /* target to us RPI, in microseconds */
-    uint32_t server_to_client_conn_params;       /* some sort of identifier of what kind of PLC the target is ??? */
+    uint32_t server_to_client_conn_params;  /* PDU size from us to client, plus other flags */
     uint8_t transport_class;                /* ALWAYS 0xA3, server transport, class 3, application trigger */
-    buf_t path;                           /* connection path. */
-} forward_open_s;
+    slice_t connection_path;                /* connection path. */
+} forward_open_t;
 
 /* the minimal Forward Open with no path */
 #define CIP_FORWARD_OPEN_MIN_SIZE   (42)
 #define CIP_FORWARD_OPEN_EX_MIN_SIZE   (46)
 
 
-int handle_forward_open(tcp_connection_p connection)
+tcp_connection_status_t process_forward_open(slice_p request, slice_p response, plc_connection_p connection)
 {
-    int rc = CIP_OK;
-    slice_p request = &(client->request);
-    slice_p response = &(client->response);
-    buf_t conn_path;
-    uint8_t fo_cmd = 0;
-    forward_open_s fo_req = {0};
-    uint16_t request_size = buf_len(request) - buf_cursor(request);
+    tcp_connection_status_t conn_rc = TCP_CONNECTION_PDU_STATUS_OK;
+    slice_status_t slice_rc = SLICE_STATUS_OK;
+    uint8_t cip_service = 0;
+    uint8_t *saved_request_start = NULL;
+    uint8_t *saved_response_start = NULL;
+    slice_t conn_path = {0};
+    forward_open_t forward_open = {0};
+
 
     info("Checking Forward Open request:");
-    buf_dump(request);
+    debug_dump_buf(DEBUG_INFO, request->start, request->end);
 
     do {
-        fo_cmd = buf_get_uint8(request);
+        /* save the start of the request for later */
+        saved_request_start = request->start;
 
-        /* minimum length check */
-        if(request_size < ((fo_cmd == CIP_FORWARD_OPEN[0]) ? CIP_FORWARD_OPEN_MIN_SIZE : CIP_FORWARD_OPEN_EX_MIN_SIZE)) {
-            /* FIXME - send back the right error. */
-            info("Forward open request size, %u, too small.   Should be greater than %d.  Skipped processing!", request_size, CIP_FORWARD_OPEN_MIN_SIZE);
-            make_cip_error(response,
-                        (uint8_t)(fo_cmd| (uint8_t)CIP_DONE),
-                        (uint8_t)CIP_ERR_INSUFFICIENT_DATA,
-                        false,
-                        (uint16_t)0
-                        );
+        slice_rc = slice_unpack(request, "&u1", &forward_open.forward_open_service);
 
-            rc = CIP_ERR_INSUFFICIENT_DATA;
-            break;
-        }
+        assert_error((slice_rc == SLICE_STATUS_OK), TCP_CONNECTION_PDU_ERR_MALFORMED, "Unable to unpack request slice!");
 
-        /* skip past the Connection Manager path */
-        if(buf_get_uint8(request) != 2) {
-            info("WARN: Unexpected path length!");
-            return CIP_ERR_INVALID_PARAMETER;
-        }
+        /* some of the services need the service */
+        request->start = saved_request_start;
 
-        /* skip the rest of the path */
-        buf_get_uint8(request);
-        buf_get_uint8(request);
-        buf_get_uint8(request);
-        buf_get_uint8(request);
+        /* store the response start for later. */
+        saved_response_start = response->start;
 
-        /* get the data. */
+        /* unpack the first common part. */
+        slice_rc = slice_unpack(request, "u1,u1,u4,u4,u2,u2,u4,u1,00,00,00,u4",
+                                          &forward_open.secs_per_tick,
+                                          &forward_open.timeout_ticks,
+                                          &forward_open.server_conn_id, /* must be zero */
+                                          &forward_open.client_conn_id,
+                                          &forward_open.conn_serial_number,
+                                          &forward_open.orig_vendor_id,
+                                          &forward_open.orig_serial_number,
+                                          &forward_open.conn_timeout_multiplier,
+                                          &forward_open.client_to_server_rpi
+                                );
 
-        fo_req.secs_per_tick = buf_get_uint8(request);
-        fo_req.timeout_ticks = buf_get_uint8(request);
-        fo_req.server_conn_id = buf_get_uint32_le(request);
-        fo_req.client_conn_id = buf_get_uint32_le(request);
-        fo_req.conn_serial_number = buf_get_uint16_le(request);
-        fo_req.orig_vendor_id = buf_get_uint16_le(request);
-        fo_req.orig_serial_number = buf_get_uint32_le(request);
-        fo_req.conn_timeout_multiplier = buf_get_uint8(request); /* byte plus 3-bytes of padding. */
-        buf_get_uint8(request);
-        buf_get_uint8(request);
-        buf_get_uint8(request);
-        fo_req.client_to_server_rpi = buf_get_uint32_le(request);
+        assert_error((slice_rc == SLICE_STATUS_OK), TCP_CONNECTION_PDU_ERR_MALFORMED, "Unable to unpack request slice!");
 
-        if(fo_cmd == CIP_FORWARD_OPEN[0]) {
-            /* old command uses 16-bit value. */
-            fo_req.client_to_server_conn_params = buf_get_uint16_le(request);
+        if(forward_open.forward_open_service == CIP_SERVICE_FORWARD_OPEN) {
+            uint16_t c2s_params = 0;
+            uint16_t s2c_params = 0;
+
+            /* now unpack the client params which are service-specific */
+            slice_rc = slice_unpack(request, "u2", &c2s_params);
+
+            forward_open.client_to_server_conn_params = (uint32_t)c2s_params;
         } else {
-            /* new command has 32-bit field here. */
-            fo_req.client_to_server_conn_params = buf_get_uint32_le(request);
+            slice_rc = slice_unpack(request, "u4", &forward_open.client_to_server_conn_params);
         }
 
-        fo_req.server_to_client_rpi = buf_get_uint32_le(request);
+        assert_error((slice_rc == SLICE_STATUS_OK), TCP_CONNECTION_PDU_ERR_MALFORMED, "Unable to unpack request slice!");
 
-        if(fo_cmd == CIP_FORWARD_OPEN[0]) {
-            /* old command uses 16-bit value. */
-            fo_req.server_to_client_conn_params = buf_get_uint16_le(request);
+        slice_rc = slice_unpack(request, "u4", &forward_open.server_to_client_rpi);
+
+        assert_error((slice_rc == SLICE_STATUS_OK), TCP_CONNECTION_PDU_ERR_MALFORMED, "Unable to unpack request slice!");
+
+        if(forward_open.forward_open_service == CIP_SERVICE_FORWARD_OPEN) {
+            uint16_t s2c_params = 0;
+
+            /* now unpack the client params which are service-specific */
+            slice_rc = slice_unpack(request, "u2", &s2c_params);
+
+            forward_open.server_to_client_conn_params = (uint32_t)s2c_params;
         } else {
-            /* new command has 32-bit field here. */
-            fo_req.server_to_client_conn_params = buf_get_uint32_le(request);
+            slice_rc = slice_unpack(request, "u4", &forward_open.server_to_client_conn_params);
         }
 
-        fo_req.transport_class = buf_get_uint8(request);
+        assert_error((slice_rc == SLICE_STATUS_OK), TCP_CONNECTION_PDU_ERR_MALFORMED, "Unable to unpack request slice!");
 
-        /* check the remaining length */
-        if(buf_cursor(request) >= buf_len(request)) {
-            /* FIXME - send back the right error. */
-            info("Ran out of data processing the packet!");
-            make_cip_error(response, (uint8_t)(buf_get_uint8(request) | CIP_DONE), (uint8_t)CIP_ERR_INSUFFICIENT_DATA, false, (uint16_t)0);
-            rc = CIP_ERR_INSUFFICIENT_DATA;
-            break;
-        }
-
-        if(!match_path(request, false, &(client->plc->path[0]), client->plc->path_len)) {
-            /* FIXME - send back the right error. */
-            info("Forward open request path did not match the path for this PLC!");
-            make_cip_error(response, (uint8_t)(buf_get_uint8(request) | CIP_DONE), (uint8_t)CIP_ERR_PATH_DEST_UNKNOWN, false, (uint16_t)0);
-            rc = CIP_ERR_PATH_DEST_UNKNOWN;
-            break;
-        }
+        /* now get the rest */
+        slice_rc = slice_unpack(request, "u8,e",
+                                          &forward_open.transport_class,
+                                          &forward_open.connection_path
+                               );
+        assert_error((slice_rc == SLICE_STATUS_OK), TCP_CONNECTION_PDU_ERR_MALFORMED, "Unable to unpack request slice!");
 
         /* check to see how many refusals we should do. */
-        if(client->conn_config.reject_fo_count > 0) {
-            client->conn_config.reject_fo_count--;
-            info("Forward open request being bounced for debugging. %d to go.",client->conn_config.reject_fo_count);
+        if(connection->cip_connection.reject_fo_count > 0) {
+            connection->cip_connection.reject_fo_count--;
+
+            info("Forward open request being bounced for debugging. %d to go.", connection->cip_connection.reject_fo_count);
+
             make_cip_error(response,
-                                (uint8_t)(buf_get_uint8(request) | CIP_DONE),
-                                (uint8_t)CIP_ERR_FLAG,
-                                true,
-                                (uint16_t)CIP_ERR_EX_DUPLICATE_CONN);
-            rc = CIP_ERR_EX_DUPLICATE_CONN;
+                           (uint8_t)(buf_get_uint8(request) | CIP_DONE),
+                           (uint8_t)CIP_ERR_FLAG,
+                           true,
+                           (uint16_t)CIP_ERR_EX_DUPLICATE_CONN
+                          );
+
+            conn_rc = TCP_CONNECTION_PDU_STATUS_OK;
+
             break;
         }
 
-        /* all good if we got here. */
-        client->conn_config.client_connection_id = fo_req.client_conn_id;
-        client->conn_config.client_connection_serial_number = fo_req.conn_serial_number;
-        client->conn_config.client_vendor_id = fo_req.orig_vendor_id;
-        client->conn_config.client_serial_number = fo_req.orig_serial_number;
-        client->conn_config.client_to_server_rpi = fo_req.client_to_server_rpi;
-        client->conn_config.server_to_client_rpi = fo_req.server_to_client_rpi;
-        client->conn_config.server_connection_id = (uint32_t)rand();
-        client->conn_config.server_connection_seq = (uint16_t)rand();
+        /* all good if we got here. Save some values to the persistent connection state. */
+        connection->cip_connection.client_connection_id = forward_open.client_conn_id;
+        connection->cip_connection.client_connection_serial_number = forward_open.conn_serial_number;
+        connection->cip_connection.client_vendor_id = forward_open.orig_vendor_id;
+        connection->cip_connection.client_serial_number = forward_open.orig_serial_number;
+        connection->cip_connection.client_to_server_rpi = forward_open.client_to_server_rpi;
+        connection->cip_connection.server_to_client_rpi = forward_open.server_to_client_rpi;
+        connection->cip_connection.server_connection_id = (uint32_t)rand();
+        connection->cip_connection.server_connection_seq = (uint16_t)rand();
 
-        /* store the allowed packet sizes. */
-        client->conn_config.client_to_server_max_packet = (fo_req.client_to_server_conn_params &
-                                ((fo_cmd == CIP_FORWARD_OPEN[0]) ? 0x1FF : 0x0FFF)) + 64; /* MAGIC */
-        client->conn_config.server_to_client_max_packet = fo_req.server_to_client_conn_params &
-                                ((fo_cmd == CIP_FORWARD_OPEN[0]) ? 0x1FF : 0x0FFF);
+        /* calculate the allowed packet sizes. */
+        connection->cip_connection.client_to_server_max_packet = (forward_open.client_to_server_conn_params &
+                                ((forward_open.forward_open_service == CIP_SERVICE_FORWARD_OPEN) ? 0x1FF : 0x0FFF)) + 64; /* MAGIC */
+        connection->cip_connection.server_to_client_max_packet = forward_open.server_to_client_conn_params &
+                                ((forward_open.forward_open_service == CIP_SERVICE_FORWARD_OPEN) ? 0x1FF : 0x0FFF);
 
         /* FIXME - check that the packet sizes are valid 508 or 4002 */
 
@@ -326,7 +347,7 @@ typedef struct {
 #define CIP_FORWARD_CLOSE_MIN_SIZE   (16)
 
 
-int handle_forward_close(tcp_connection_p connection)
+int process_forward_close(tcp_connection_p connection)
 {
     int rc = CIP_OK;
     slice_p request = &(client->request);
@@ -436,7 +457,7 @@ int handle_forward_close(tcp_connection_p connection)
 #define CIP_READ_MIN_SIZE (6)
 #define CIP_READ_FRAG_MIN_SIZE (10)
 
-int handle_read_request(tcp_connection_p connection)
+int process_tag_read_request(tcp_connection_p connection)
 {
     int rc = CIP_OK;
     slice_p request = &(client->request);
@@ -449,7 +470,7 @@ int handle_read_request(tcp_connection_p connection)
     uint16_t element_count = 0;
     uint32_t byte_offset = 0;
     // size_t read_start_offset = 0;
-    tag_def_s *tag = NULL;
+    tag_def_t *tag = NULL;
     size_t tag_data_length = 0;
     size_t total_request_size = 0;
     size_t remaining_size = 0;
@@ -608,7 +629,7 @@ int handle_read_request(tcp_connection_p connection)
 #define CIP_WRITE_MIN_SIZE (6)
 #define CIP_WRITE_FRAG_MIN_SIZE (10)
 
-int handle_write_request(tcp_connection_p connection)
+int process_tag_write_request(tcp_connection_p connection)
 {
     int rc = CIP_OK;
     slice_p request = &(client->request);
@@ -617,7 +638,7 @@ int handle_write_request(tcp_connection_p connection)
     uint8_t tag_segment_size = 0;
     uint32_t byte_offset = 0;
     size_t write_start_offset = 0;
-    tag_def_s *tag = NULL;
+    tag_def_t *tag = NULL;
     size_t tag_data_length = 0;
     size_t total_request_size = 0;
     uint16_t write_data_type = 0;
@@ -733,7 +754,7 @@ int handle_write_request(tcp_connection_p connection)
  * find the tag name, then check the numeric segments, if any, against the
  * tag dimensions.
  */
-int process_tag_segment(tcp_connection_p connection, tag_def_s **tag)
+int process_tag_segment(tcp_connection_p connection, tag_def_t **tag)
 {
     int rc = CIP_OK;
     slice_p request = &(client->request);
@@ -984,7 +1005,7 @@ int process_tag_name(slice_p tag_path, const char **name, uint8_t *name_len)
 }
 
 
-int process_tag_dim_index(slice_p tag_path, tag_def_s *tag)
+int process_tag_dim_index(slice_p tag_path, tag_def_t *tag)
 {
     int rc = CIP_OK;
 

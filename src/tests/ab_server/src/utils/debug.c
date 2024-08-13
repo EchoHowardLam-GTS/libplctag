@@ -37,8 +37,8 @@
 #include <stdarg.h>
 #include <string.h>
 #include <errno.h>
-#include "utils/debug.h"
-#include "utils/time_utils.h"
+#include "debug.h"
+#include "time_utils.h"
 
 
 /*

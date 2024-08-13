@@ -156,7 +156,7 @@ int handle_plc5_read_request(tcp_connection_p connection)
     size_t data_file_num = 0;
     size_t data_file_element = 0;
     uint8_t data_file_prefix = 0;
-    tag_def_s *tag = client->plc->tags;
+    tag_def_t *tag = client->plc->tags;
 
     info("Got packet:");
     buf_dump(request);
@@ -254,7 +254,7 @@ int handle_plc5_write_request(tcp_connection_p connection)
     size_t data_file_num = 0;
     size_t data_file_element = 0;
     uint8_t data_file_prefix = 0;
-    tag_def_s *tag = client->plc->tags;
+    tag_def_t *tag = client->plc->tags;
 
     info("Got request:");
     buf_dump_offset(request, buf_get_cursor(request));
@@ -358,7 +358,7 @@ int handle_slc_read_request(tcp_connection_p connection)
     size_t data_file_type = 0;
     size_t data_file_element = 0;
     size_t data_file_subelement = 0;
-    tag_def_s *tag = client->plc->tags;
+    tag_def_t *tag = client->plc->tags;
 
     info("Got request:");
     buf_dump_offset(request, buf_get_cursor(request));
@@ -474,7 +474,7 @@ int handle_slc_write_request(tcp_connection_p connection)
     size_t data_file_element = 0;
     size_t data_file_subelement = 0;
     size_t data_len = 0;
-    tag_def_s *tag = client->plc->tags;
+    tag_def_t *tag = client->plc->tags;
 
     info("Got request:");
     buf_dump_offset(request, buf_get_cursor(request));
