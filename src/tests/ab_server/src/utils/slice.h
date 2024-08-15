@@ -31,164 +31,408 @@
  *   59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.             *
  ***************************************************************************/
 
+
 #pragma once
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 
+#include "debug.h"
 
-
-typedef enum {
-    SLICE_STATUS_OK,
-    SLICE_ERR_NULL_PTR,
-    SLICE_ERR_TOO_LITTLE_DATA,
-    SLICE_ERR_TOO_MUCH_DATA,
-    SLICE_ERR_TOO_LITTLE_SPACE,
-    SLICE_ERR_UNSUPPORTED_FORMAT,
-    SLICE_ERR_INCOMPLETE_FORMAT,
-    SLICE_ERR_INCORRECT_FORMAT,
-    SLICE_ERR_BAD_PARAM,
-    SLICE_ERR_OUT_OF_BOUNDS,
-    SLICE_ERR_NOT_FOUND,
-    SLICE_ERR_OVERFLOW,
-} slice_status_t;
-
-
-typedef struct slice_t {
+typedef struct {
     uint8_t *start;
-    uint8_t *end;
+    uint32_t length;
+    uint32_t offset;
 } slice_t;
 
 typedef slice_t *slice_p;
 
-#define SLICE_STATIC_INIT(START, END) { .start = (START), .end = (END) }
+#define SLICE_STATIC_INIT_FROM_PTR_LENGTH(START, LENGTH) { .start = (START), .length = (LENGTH), .offset = (0) }
+#define SLICE_STATIC_INIT_FROM_PTR_PTR(START, END) { .start = (START), .length = (uint32_t)((END) - (START), .offset = (0)) }
 
-static inline slice_status_t slice_init(slice_p slice, uint8_t *start, uint8_t *end)
+
+static inline bool slice_init_from_ptr_length(slice_p buf, uint8_t *start, uint32_t length)
 {
-    if(slice) {
-        slice->start = start;
-        slice->end = end;
+    if(buf && start) {
+        buf->start = start;
+        buf->length = (uint32_t)length;
+        buf->offset = 0;
 
-        return SLICE_STATUS_OK;
-    }
-
-    return SLICE_ERR_NULL_PTR;
-}
-
-
-static inline bool slice_contains(slice_p slice, uint8_t *ptr)
-{
-    if(slice && ptr) {
-        if((uintptr_t)(slice->start) <= (uintptr_t)(ptr) && (uintptr_t)(ptr) < (uintptr_t)(slice->end)) {
-            return true;
-        }
+        return true;
     }
 
     return false;
 }
 
 
-static inline uint32_t slice_len(slice_p slice)
+
+/*
+ * Initialize a buffer to the passed start and end pointers.  The offset is set to the starting
+ * pointer.   If there are no errors, return true. If any of the pointers are null, return false.
+ * If the start pointer is not less than or equal to the end pointer, return false.
+ */
+static inline bool slice_init_from_ptr_ptr(slice_p buf, uint8_t *start, uint8_t *end)
 {
-    if(slice && slice->start && slice->end) {
-        if((uintptr_t)(slice->end) >= (uintptr_t)(slice->start)) {
-            return (uint32_t)((uintptr_t)(slice->end) - (uintptr_t)(slice->start));
+    if(buf && start && end) {
+        return slice_init_from_ptr_length(buf, start, (uint32_t)(end - start));
+    }
+
+    return false;
+}
+
+
+static inline uint8_t *slice_get_offset_as_ptr(slice_p buf)
+{
+    if(buf) {
+        return (buf->start + buf->offset);
+    }
+
+    return NULL;
+}
+
+#define SLICE_GET_CURSOR_FAIL (PTRDIFF_MIN)
+
+/*
+ * Return the offset positions as an offset from the start or
+ * SLICE_GET_CURSOR_FAIL if the buf pointer is NULL or the offset
+ * is negative.
+ */
+static inline uint32_t slice_get_offset(slice_p buf)
+{
+    if(buf) {
+        return buf->offset;
+    }
+
+    return SLICE_GET_CURSOR_FAIL;
+}
+
+/*
+ * Set the offset.  If it is out of bounds, it will be clamped to either
+ * the start or end of the buffer.  True is returned if the offset can be
+ * set.  False if the buffer pointer is NULL.
+ */
+static inline bool slice_set_offset_by_ptr(slice_p buf, uint8_t *offset_ptr)
+{
+    if(buf) {
+        intptr_t start_int = (intptr_t)(buf->start);
+        intptr_t end_int = (intptr_t)(buf->start + buf->length);
+        intptr_t offset_int = (intptr_t)(offset_ptr);
+
+        if(offset_int < start_int) {
+            buf->offset = 0;
+        } else if(offset_int > end_int) {
+            buf->offset = buf->length;
+        } else {
+            buf->offset = (uint32_t)(offset_int - start_int);
+        }
+
+        return true;
+    }
+
+    return false;
+}
+
+static inline bool slice_set_offset(slice_p buf, uint32_t new_offset)
+{
+    if(buf) {
+        if(new_offset <= buf->length) {
+            buf->offset = new_offset;
+        } else {
+            buf->offset = buf->length;
         }
     }
 
-    return 0;
+    return false;
 }
 
-extern slice_status_t slice_split_by_ptr(slice_p source, uint8_t split_point, slice_p first, slice_p second);
-
-
-static inline slice_status_t slice_split_by_offset(slice_p source, uint32_t offset, slice_p first, slice_p second)
+static inline bool slice_clamp_length_to_offset(slice_p buf)
 {
-    slice_status_t rc = SLICE_STATUS_OK;
+    if(buf) {
+        buf->length = buf->offset;
 
-    do {
-        uint8_t *split_point = NULL;
+        return true;
+    }
 
-        if(!source) {
-            rc = SLICE_ERR_NULL_PTR;
-            break;
-        }
-
-        split_point = source->start + offset;
-
-        rc = slice_split_by_ptr(source, split_point, first, second);
-    } while(0);
-
-    return rc;
+    return false;
 }
 
-extern slice_status_t slice_to_string(slice_p slice, char *result, uint32_t result_size, bool word_swap);
-extern slice_status_t string_to_slice(const char *source, slice_p dest, bool word_swap);
-extern slice_status_t slice_from_slice(slice_p parent, slice_p new_slice, uint8_t *start, uint8_t *end);
+static inline bool slice_clamp_start_to_offset(slice_p buf)
+{
+    if(buf) {
+        buf->start = buf->start + buf->offset;
+        return true;
+    }
 
+    return false;
+}
+
+#define SLICE_LEN_FAIL (PTRDIFF_MAX)
+
+static inline uint32_t slice_len(slice_p buf)
+{
+    if(buf) {
+        return buf->length;
+    }
+
+    return SLICE_LEN_FAIL;
+}
+
+static inline uint32_t slice_len_to_offset(slice_p buf)
+{
+    if(buf) {
+        return buf->offset;
+    }
+
+    return INTPTR_MIN;
+}
+
+static inline uint32_t slice_len_from_offset(slice_p buf)
+{
+    if(buf) {
+        return buf->length - buf->offset;
+    }
+
+    return INTPTR_MIN;
+}
 
 /*
- * Format characters
+ * Split the buffer into two parts at the offset.   If one of the
+ * results pointers is NULL, to not set that one.   Returns true
+ * on success and false when the source buffer pointer is NULL.
  *
- * pack and unpack
- *
- * [0-9A-F]{2} - two digit hex value.
- *      pack: insert the byte value directly.
- *    unpack: match the byte value directly.
- *
- * , = ignored, used as visual separation in format string.
- *
- * < - set encode/decode to little-endian. No result.
- *
- * > - set encode/decode to big-endian.  No result.
- *
- * ~[b,w] - Swap bytes or words, only for the next field.
- *
- * ^ - save the pointer to the current position in the slice.
- *      pack: a pointer to a pointer to uint8_t.
- *    unpack: a pointer to a pointer to uint8_t.
- *
- * a[1,2,4,8] - align to specified byte boundary. Pad with zero bytes.  No result saved.
- *
- * i[1,2,4,8] - signed integer of specificed size in bytes.
- *      pack: takes a signed integer of the specified size, int8_t, int16_t...
- *    unpack: takes a pointer to a signed integer of the specified size
- *
- * u[1,2,4,8] - as for above, but unsigned.
- *
- * f[4,8] - 4 or 8-byte floating point.
- *      pack: takes a 4 or 8-byte float/double.
- *    unpack: takes a pointer to a float or double.
- *
- * c[1,2,4,8] - counted byte string.  Consumes/produces the count word and the following
- *          count bytes.
- *          pack: takes a pointer to a slice with valid (non-zero) start and end pointers.
- *                If the slice has more data than the count word can encode, pack returns
- *                SLICE_ERR_TOO_MUCH_DATA.
- *        unpack: takes a pointer to a slice.  The start and end are set to point to the
- *                data of the counted string in the buffer.  If the count value is larger
- *                than the number of bytes left in the unprocessed data
- *                SLICE_ERR_TOO_LITTLE_DATA is returned.
- *
- *
- * th - Value-terminated byte string.   The "h" is a pair of hex digits that denote the byte
- *      value on which to terminate.
- *        pack: takes a slice pointer. The slice contains the byte string. The data must contain
- *              the terminator byte as well.
- *      unpack: takes a slice pointer.  takes a pointer to a slice.  The start and end are set to point to the
- *              data of the terminated string in the buffer.  If the terminator is not found, then
- *              SLICE_ERR_NOT_FOUND is returned.
- *
- * e[0,1] - EPATH byte string. The EPATH starts with a single byte count of the number of 16-bit
- *          words in the EPATH.  The EPATH can be padded (1) or unpadded (0). A padded EPATH will
- *          have a zero byte after the count word.
- *          pack: takes a pointer to a slice.  If the data in the slice is longer than 510 bytes
- *                pack returns SLICE_ERR_TOO_MUCH_DATA as the length cannot be represented in one
- *                byte. The count word and data in the slice are copied into the slicefer.
- *        unpack: takes a pointer to a slice. Behaves as for "c1" except the count is multiplied
- *                by two to get the number of bytes (0-510).
- *
+ * The offsets in both parts are set to the part's start pointer.
  */
+static inline bool slice_split(slice_p src, slice_p first, slice_p second)
+{
+    if(src) {
+        if(first) {
+            first->start = src->start;
+            first->length = src->offset;
+            first->offset = 0;
+        }
 
-extern slice_status_t slice_unpack(slice_t *slice, const char *fmt, ...);
-extern slice_status_t slice_pack(slice_t *slice, const char *fmt, ...);
+        if(second) {
+            second->start = src->start + src->offset;
+            second->length = src->length - src->offset;
+            second->offset = 0;
+        }
+
+        return true;
+    }
+
+    return false;
+}
+
+#define SLICE_GET_BYTE_FAIL (UINT16_MAX)
+
+// static inline uint16_t slice_get_byte_by_ptr(slice_p buf, uint8_t *ptr)
+// {
+//     uint16_t result = SLICE_GET_BYTE_FAIL;
+
+//     if(buf) {
+//         intptr_t start_int = (intptr_t)(buf->start);
+//         intptr_t end_int = (intptr_t)(buf->start + buf->length);
+//         intptr_t ptr_int = (intptr_t)(ptr);
+
+//         if(ptr_int >= start_int && ptr_int < end_int) {
+//             result = *ptr;
+//         }
+//     }
+
+//     return result;
+// }
+
+static inline uint16_t slice_get_byte_by_offset(slice_p buf, uint32_t offset)
+{
+    uint16_t result = SLICE_GET_BYTE_FAIL;
+
+    if(buf) {
+        if(offset < buf->length) {
+            result = *(buf->start + offset);
+        }
+    }
+
+    return result;
+}
+
+/*
+ * Get a byte from the buffer at the offset.  If the passed boolean flag to change the offset is
+ * set to true, then the function updates the offset.  If it is false, the offset will not be changed.
+ *
+ * If there is no data left (offset == end) or the buf pointer is NULL then return SLICE_GET_BYTE_FAIL.
+ */
+static inline uint16_t slice_get_byte(slice_p buf)
+{
+    uint16_t result = SLICE_GET_BYTE_FAIL;
+
+    if(buf && buf->offset < buf->length) {
+        result = (uint16_t)*(buf->start + buf->offset);
+
+        ++ buf->offset;
+    }
+
+    return result;
+}
+
+
+// static inline bool slice_set_byte_at_ptr(slice_p buf, uint8_t *ptr, uint8_t byte_val)
+// {
+//     if(buf && ptr) {
+//         intptr_t start_int = (intptr_t)(buf->start);
+//         intptr_t end_int = (intptr_t)(buf->start + buf->length);
+//         intptr_t ptr_int = (intptr_t)(ptr);
+
+//         if(start_int <= ptr_int && ptr_int < end_int) {
+//             *ptr = byte_val;
+//             return true;
+//         }
+//     }
+
+//     return false;
+// }
+
+static inline bool slice_set_byte_at_offset(slice_p buf, size_t offset, uint8_t byte_val)
+{
+    if(buf && offset < buf->length) {
+        *(buf->start + offset) = byte_val;
+        return true;
+    }
+
+    return false;
+}
+
+/*
+ * Set the byte value at the offset position in the buffer.   If the passed boolean flag is true,
+ * the update the offset position after setting the data.  Return true on success.  If the buffer
+ * pointer is NULL, return false.
+ */
+static inline bool slice_set_byte(slice_p buf, uint8_t byte_val)
+{
+    bool result = false;
+
+    if(buf && buf->offset < buf->length) {
+        *(buf->start + buf->offset) = byte_val;
+
+        ++ buf->offset;
+
+        result = true;
+    }
+
+    return result;
+}
+
+
+static inline void slice_dump_to_offset(debug_level_t level, slice_p buf)
+{
+    if(buf) {
+        debug_dump_buf(level, buf->start, buf->start + buf->offset);
+    } else {
+        warn("No data to dump!");
+    }
+}
+
+
+static inline void slice_dump_from_offset(debug_level_t level, slice_p buf)
+{
+    if(buf) {
+        debug_dump_buf(level, buf->start + buf->offset, buf->start + buf->length);
+    } else {
+        warn("No data to dump!");
+    }
+}
+
+
+
+/* data mapping definitions */
+
+typedef enum {
+    SLICE_VAL_TYPE_NONE = 0,
+    SLICE_VAL_TYPE_SCALAR,
+    SLICE_VAL_TYPE_BIT,
+    SLICE_VAL_TYPE_ARRAY,
+    SLICE_VAL_TYPE_STRUCT,
+} slice_val_type_t;
+
+typedef enum {
+    SLICE_VAL_PROCESS_STATUS_OK,
+    SLICE_VAL_PROCESS_ERR_WRONG_TYPE,
+    SLICE_VAL_PROCESS_ERR_INSUFFICIENT_DATA,
+    SLICE_VAL_PROCESS_ERR_INSUFFICIENT_SPACE,
+    SLICE_VAL_PROCESS_ERR_NULL_PTR,
+    SLICE_VAL_PROCESS_ERR_GET,
+    SLICE_VAL_PROCESS_ERR_PUT,
+    SLICE_VAL_PROCESS_ERR_ALIGN,
+} slice_val_process_status_t;
+
+
+
+#define SLICE_FIELD_ZERO_SIZE (0)
+#define SLICE_FIELD_VARIABLE_SIZE (UINT32_MAX)
+
+typedef struct slice_val_def_t *slice_val_def_p;
+
+typedef struct slice_val_def_t {
+    const char *name;
+
+    /* type of the value */
+    slice_val_type_t val_type;
+
+    /* common */
+    uint8_t encoded_alignment;
+    // uint32_t encoded_byte_offset;
+    uint32_t encoded_byte_size;
+
+    uint8_t decoded_alignment;
+    // uint32_t decoded_byte_offset;
+    uint32_t decoded_byte_size;
+
+    /* type-specific */
+    union {
+        struct {
+            uint32_t encoded_bit_offset;
+            uint32_t decoded_bit_offset;
+        } bit_val;
+
+        struct {
+            uint32_t num_elements;
+            slice_val_def_p element_type_def;
+        } array_val;
+
+        struct {
+            uint32_t num_fields;
+            slice_val_def_p field_type_defs;
+        } struct_val;
+    };
+
+    /**
+     * @brief Decode the raw data into a value.
+     *
+     * @return - One of:
+     *      SLICE_VAL_PROCESS_STATUS_OK - processing succeeded.
+     *      SLICE_VAL_PROCESS_ERR_INSUFFICIENT_DATA - there was not enough data in the buffer to decode the value.
+     *      SLICE_VAL_PROCESS_ERR_NULL_PTR - one or more pointers were NULL.
+     */
+    slice_val_process_status_t (*decoder_func)(struct slice_val_def_t *val_def, slice_p slice_src, slice_p dest);
+
+    /**
+     * @brief Encode the value into the data buffer.
+     *
+     * @return - One of:
+     *      SLICE_VAL_PROCESS_STATUS_OK - processing succeeded.
+     *      SLICE_VAL_PROCESS_ERR_INSUFFICIENT_DATA - there was not enough data in the buffer to decode the value.
+     *      SLICE_VAL_PROCESS_ERR_NULL_PTR - one or more pointers were NULL.
+     */
+    slice_val_process_status_t (*encoder_func)(struct slice_val_def_t *val_def, slice_p slice_src, slice_p dest);
+} slice_val_def_t;
+
+typedef slice_val_def_t *slice_val_def_p;
+
+#define SLICE_VAL_ALL_ELEMENTS (SIZE_MAX)
+
+extern slice_val_process_status_t slice_val_decode(struct slice_val_def_t *val_def, slice_p slice_src, slice_p dest);
+extern slice_val_process_status_t slice_val_encode(struct slice_val_def_t *val_def, slice_p slice_src, slice_p dest);
+
+/* basic encoding and decoding functions */
+extern slice_val_process_status_t slice_val_decode_u8(struct slice_val_def_t *val_def, slice_p slice_src, slice_p dest);
+extern slice_val_process_status_t slice_val_encode_u8(struct slice_val_def_t *val_def, slice_p slice_src, slice_p dest);
