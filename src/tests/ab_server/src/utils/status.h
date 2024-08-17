@@ -33,27 +33,28 @@
 
 #pragma once
 
-#include "utils/slice.h"
-#include "utils/status.h"
-#include "utils/tcp_server.h"
+#include <stdbool.h>
 
-#include "plc.h"
+typedef enum {
+    STATUS_OK = 0,
+    STATUS_PENDING,
+    STATUS_TERMINATE,
 
-enum {
-    CIP_OK = 0,
-    CIP_ERR_FLAG = 0x01,
-    CIP_ERR_PATH_DEST_UNKNOWN = 0x05,
-    CIP_ERR_FRAG = 0x06,
-    CIP_ERR_UNSUPPORTED = 0x08,
-    CIP_ERR_INSUFFICIENT_DATA = 0x13,
-    CIP_ERR_INVALID_PARAMETER = 0x20,
+    STATUS_ERR_NULL_PTR = -1000,
+    STATUS_ERR_RESOURCE,
+    STATUS_ERR_NOT_FOUND,
+    STATUS_ERR_NOT_RECOGNIZED,
+    STATUS_ERR_NOT_SUPPORTED,
+    STATUS_ERR_PARAM,
+    STATUS_ERR_OP_FAILED,
+    STATUS_ERR_TIMEOUT,
+    STATUS_ERR_ABORTED,
+    STATUS_ERR_BUSY,
+} status_t;
 
-    CIP_ERR_EXTENDED = 0xFF,
+static inline bool status_is_error(status_t status)
+{
+    return (status < 0 ? true : false);
+}
 
-    /* extended errors */
-    CIP_ERR_EX_TOO_LONG = 0x2105,
-    CIP_ERR_EX_DUPLICATE_CONN = 0x100,
-};
-
-
-extern status_t cip_dispatch_request(slice_p request, slice_p response, plc_connection_p connection);
+extern const char *status_to_str(status_t status);

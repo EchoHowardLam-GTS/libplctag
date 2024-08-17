@@ -31,29 +31,28 @@
  *   59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.             *
  ***************************************************************************/
 
-#pragma once
 
-#include "utils/slice.h"
-#include "utils/status.h"
-#include "utils/tcp_server.h"
-
-#include "plc.h"
-
-enum {
-    CIP_OK = 0,
-    CIP_ERR_FLAG = 0x01,
-    CIP_ERR_PATH_DEST_UNKNOWN = 0x05,
-    CIP_ERR_FRAG = 0x06,
-    CIP_ERR_UNSUPPORTED = 0x08,
-    CIP_ERR_INSUFFICIENT_DATA = 0x13,
-    CIP_ERR_INVALID_PARAMETER = 0x20,
-
-    CIP_ERR_EXTENDED = 0xFF,
-
-    /* extended errors */
-    CIP_ERR_EX_TOO_LONG = 0x2105,
-    CIP_ERR_EX_DUPLICATE_CONN = 0x100,
-};
+#include "status.h"
 
 
-extern status_t cip_dispatch_request(slice_p request, slice_p response, plc_connection_p connection);
+const char *status_to_str(status_t status)
+{
+    switch(status) {
+        case STATUS_OK: return "STATUS_OK.  No errors."; break;
+        case STATUS_PENDING: return "STATUS_PENDING. Waiting for an operation to complete."; break;
+        case STATUS_TERMINATE: return "STATUS_TERMINATE.  Shut down or shutting down."; break;
+
+        case STATUS_ERR_NULL_PTR:  return "STATUS_ERR_NULL_PTR.  One or more internal arguments were NULL."; break;
+        case STATUS_ERR_RESOURCE:  return "STATUS_ERR_RESOURCE. Insufficient or bad resource."; break;
+        case STATUS_ERR_NOT_FOUND:  return "STATUS_ERR_NOT_FOUND. The requested item was not found."; break;
+        case STATUS_ERR_NOT_RECOGNIZED:  return "STATUS_ERR_NOT_RECOGNIZED. The requested operation was not recognized."; break;
+        case STATUS_ERR_NOT_SUPPORTED:  return "STATUS_ERR_NOT_SUPPORTED.  The requested operation was recognized but not supported."; break;
+        case STATUS_ERR_PARAM:  return "STATUS_ERR_PARAM.  The value of a parameter is not supported or usable."; break;
+        case STATUS_ERR_OP_FAILED: return "STATUS_ERR_OP_FAILED.  An operation failed."; break;
+        case STATUS_ERR_TIMEOUT: return "STATUS_ERR_TIMEOUT. A timeout was reached waiting for an operation to complete."; break;
+        case STATUS_ERR_ABORTED: return "STATUS_ERR_ABORTED.  The operation was aborted externally."; break;
+        case STATUS_ERR_BUSY: return "STATUS_ERR_BUSY. An operation is already underway."; break;
+
+        default: return "Unknown status code!"; break;
+    }
+}

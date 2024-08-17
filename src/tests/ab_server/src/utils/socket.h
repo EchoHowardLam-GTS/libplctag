@@ -34,32 +34,17 @@
 #pragma once
 
 #include <stdint.h>
+
 #include "slice.h"
+#include "status.h"
 
 #ifndef SOCKET
     #define SOCKET int
 #endif
 
-typedef enum {
-    SOCKET_STATUS_OK,
-    SOCKET_ERR_STARTUP,
-    SOCKET_ERR_OPEN,
-    SOCKET_ERR_CREATE,
-    SOCKET_ERR_BIND,
-    SOCKET_ERR_LISTEN,
-    SOCKET_ERR_SETOPT,
-    SOCKET_ERR_READ,
-    SOCKET_ERR_WRITE,
-    SOCKET_ERR_SELECT,
-    SOCKET_ERR_ACCEPT,
-    SOCKET_ERR_TIMEOUT,
-    SOCKET_ERR_BAD_FD,
-    SOCKET_ERR_BAD_PARAM,
-    SOCKET_ERR_NO_MEMORY,
-} socket_status_t;
 
-extern socket_status_t socket_open(const char *host, const char *port, SOCKET *sock_fd);
+extern status_t socket_open(const char *host, const char *port, SOCKET *sock_fd);
 extern void socket_close(SOCKET sock);
-extern socket_status_t socket_accept(SOCKET sock, SOCKET *client_fd, uint32_t timeout_ms);
-extern socket_status_t socket_read(SOCKET sock, slice_p in_buf, uint32_t timeout_ms);
-extern socket_status_t socket_write(SOCKET sock, slice_p out_buf, uint32_t timeout_ms);
+extern status_t socket_accept(SOCKET sock, SOCKET *client_fd, uint32_t timeout_ms);
+extern status_t socket_read(SOCKET sock, slice_p in_buf, uint32_t timeout_ms);
+extern status_t socket_write(SOCKET sock, slice_p out_buf, uint32_t timeout_ms);

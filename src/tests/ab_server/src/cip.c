@@ -90,10 +90,13 @@ typedef struct {
     slice_t path;           /* store this in a slice to avoid copying */
 } cip_header_s;
 
-static tcp_connection_status_t process_forward_open(slice_p request, slice_p response, plc_connection_p connection);
-static tcp_connection_status_t process_forward_close(slice_p request, slice_p response, plc_connection_p connection);
-static tcp_connection_status_t process_tag_read_request(slice_p request, slice_p response, plc_connection_p connection);
-static tcp_connection_status_t process_tag_write_request(slice_p request, slice_p response, plc_connection_p connection);
+typedef slice_t epath_t;
+typedef epath_t *epath_p;
+
+static status_t process_forward_open(slice_p request, slice_p response, plc_connection_p connection);
+static status_t process_forward_close(slice_p request, slice_p response, plc_connection_p connection);
+static status_t process_tag_read_request(slice_p request, slice_p response, plc_connection_p connection);
+static status_t process_tag_write_request(slice_p request, slice_p response, plc_connection_p connection);
 
 static int process_tag_segment(tcp_connection_p connection, tag_def_t **tag);
 static int process_tag_dim_index(slice_p tag_path, tag_def_t *tag);
@@ -103,10 +106,9 @@ static int match_path(slice_p request, bool need_pad, uint8_t *path, uint8_t pat
 
 
 
-tcp_connection_status_t cip_dispatch_request(slice_p request, slice_p response, tcp_connection_p connection_arg)
+status_t cip_dispatch_request(slice_p request, slice_p response, tcp_connection_p connection_arg)
 {
-    tcp_connection_status_t conn_rc = PDU_STATUS_OK;
-    slice_status_t slice_rc = SLICE_STATUS_OK;
+    status_t slice_rc = STATUS_OK;
     plc_connection_p connection = (plc_connection_p)connection_arg;
     uint8_t cip_service = 0;
     uint8_t *saved_request_start = NULL;
@@ -123,7 +125,7 @@ tcp_connection_status_t cip_dispatch_request(slice_p request, slice_p response, 
 
         assert_info((slice_rc != SLICE_ERR_TOO_LITTLE_DATA), PDU_ERR_INCOMPLETE, "Insufficient data to unpack PDU.");
 
-        assert_warn((slice_rc == SLICE_STATUS_OK), PDU_ERR_INTERNAL, "Unable to unpack request slice!");
+        assert_warn((slice_rc == STATUS_OK), PDU_ERR_INTERNAL, "Unable to unpack request slice!");
 
         /* some of the services need the service */
         request->start = saved_request_start;
@@ -193,10 +195,10 @@ typedef struct {
 #define CIP_FORWARD_OPEN_EX_MIN_SIZE   (46)
 
 
-tcp_connection_status_t process_forward_open(slice_p request, slice_p response, plc_connection_p connection)
+status_t process_forward_open(slice_p request, slice_p response, plc_connection_p connection)
 {
-    tcp_connection_status_t conn_rc = TCP_CONNECTION_PDU_STATUS_OK;
-    slice_status_t slice_rc = SLICE_STATUS_OK;
+    status_t conn_rc = STATUS_OK;
+    status_t slice_rc = STATUS_OK;
     uint8_t cip_service = 0;
     uint8_t *saved_request_start = NULL;
     uint8_t *saved_response_start = NULL;
@@ -213,7 +215,7 @@ tcp_connection_status_t process_forward_open(slice_p request, slice_p response, 
 
         slice_rc = slice_unpack(request, "&u1", &forward_open.forward_open_service);
 
-        assert_error((slice_rc == SLICE_STATUS_OK), TCP_CONNECTION_PDU_ERR_MALFORMED, "Unable to unpack request slice!");
+        assert_error((slice_rc == STATUS_OK), STATUS_ERR_PARAM, "Unable to unpack request slice!");
 
         /* some of the services need the service */
         request->start = saved_request_start;
@@ -234,7 +236,7 @@ tcp_connection_status_t process_forward_open(slice_p request, slice_p response, 
                                           &forward_open.client_to_server_rpi
                                 );
 
-        assert_error((slice_rc == SLICE_STATUS_OK), TCP_CONNECTION_PDU_ERR_MALFORMED, "Unable to unpack request slice!");
+        assert_error((slice_rc == STATUS_OK), STATUS_ERR_PARAM, "Unable to unpack request slice!");
 
         if(forward_open.forward_open_service == CIP_SERVICE_FORWARD_OPEN) {
             uint16_t c2s_params = 0;
@@ -248,11 +250,11 @@ tcp_connection_status_t process_forward_open(slice_p request, slice_p response, 
             slice_rc = slice_unpack(request, "u4", &forward_open.client_to_server_conn_params);
         }
 
-        assert_error((slice_rc == SLICE_STATUS_OK), TCP_CONNECTION_PDU_ERR_MALFORMED, "Unable to unpack request slice!");
+        assert_error((slice_rc == STATUS_OK), STATUS_ERR_PARAM, "Unable to unpack request slice!");
 
         slice_rc = slice_unpack(request, "u4", &forward_open.server_to_client_rpi);
 
-        assert_error((slice_rc == SLICE_STATUS_OK), TCP_CONNECTION_PDU_ERR_MALFORMED, "Unable to unpack request slice!");
+        assert_error((slice_rc == STATUS_OK), STATUS_ERR_PARAM, "Unable to unpack request slice!");
 
         if(forward_open.forward_open_service == CIP_SERVICE_FORWARD_OPEN) {
             uint16_t s2c_params = 0;
@@ -265,14 +267,14 @@ tcp_connection_status_t process_forward_open(slice_p request, slice_p response, 
             slice_rc = slice_unpack(request, "u4", &forward_open.server_to_client_conn_params);
         }
 
-        assert_error((slice_rc == SLICE_STATUS_OK), TCP_CONNECTION_PDU_ERR_MALFORMED, "Unable to unpack request slice!");
+        assert_error((slice_rc == STATUS_OK), STATUS_ERR_PARAM, "Unable to unpack request slice!");
 
         /* now get the rest */
         slice_rc = slice_unpack(request, "u8,e",
                                           &forward_open.transport_class,
                                           &forward_open.connection_path
                                );
-        assert_error((slice_rc == SLICE_STATUS_OK), TCP_CONNECTION_PDU_ERR_MALFORMED, "Unable to unpack request slice!");
+        assert_error((slice_rc == STATUS_OK), STATUS_ERR_PARAM, "Unable to unpack request slice!");
 
         /* check to see how many refusals we should do. */
         if(connection->cip_connection.reject_fo_count > 0) {
@@ -287,7 +289,7 @@ tcp_connection_status_t process_forward_open(slice_p request, slice_p response, 
                            (uint16_t)CIP_ERR_EX_DUPLICATE_CONN
                           );
 
-            conn_rc = TCP_CONNECTION_PDU_STATUS_OK;
+            conn_rc = STATUS_OK;
 
             break;
         }

@@ -34,6 +34,7 @@
 #pragma once
 
 #include "compat.h"
+#include "status.h"
 
 /*
  * Define thin wrappers around native POSIX and Windows mutex functions.
@@ -49,26 +50,26 @@
 #endif
 
 
-static inline int mutex_create(mutex_t *mut)
+static inline status_t mutex_create(mutex_t *mut)
 {
-    int rc = 0;
+    status_t rc = STATUS_OK;
 
 #if defined(IS_WINDOWS)
     *mut = CreateMutex(NULL,                  /* default security attributes  */
                      FALSE,                  /* initially not owned          */
                      NULL);                  /* unnamed mutex                */
-    if(!*mut) { rc = 1; }
+    if(!*mut) { rc = STATUS_ERR_OP_FAILED; }
 #else
-    if(pthread_mutex_init(mut, NULL)) { rc = 1; }
+    if(pthread_mutex_init(mut, NULL)) { rc = STATUS_ERR_OP_FAILED; }
 #endif
 
     return rc;
 }
 
 
-static inline int mutex_lock(mutex_t *mut)
+static inline status_t mutex_lock(mutex_t *mut)
 {
-    int rc = 0;
+    status_t rc = STATUS_OK;
 
 #if defined(IS_WINDOWS)
     DWORD dwWaitResult = ~WAIT_OBJECT_0;;
@@ -78,7 +79,7 @@ static inline int mutex_lock(mutex_t *mut)
     }
 #else
     if(pthread_mutex_lock(mut)) {
-        rc = 1;
+        rc = STATUS_ERR_OP_FAILED;
     }
 #endif
 
@@ -86,17 +87,17 @@ static inline int mutex_lock(mutex_t *mut)
 }
 
 
-static inline int mutex_unlock(mutex_t *mut)
+static inline status_t mutex_unlock(mutex_t *mut)
 {
-    int rc = 0;
+    status_t rc = STATUS_OK;
 
 #if defined(IS_WINDOWS)
     if(!ReleaseMutex(mut)) {
-        rc = 1;
+        rc = STATUS_ERR_OP_FAILED;
     }
 #else
     if(pthread_mutex_unlock(mut)) {
-        rc = 1;
+        rc = STATUS_ERR_OP_FAILED;
     }
 #endif
 
@@ -104,15 +105,15 @@ static inline int mutex_unlock(mutex_t *mut)
 }
 
 
-static inline int mutex_destroy(mutex_t *mut)
+static inline status_t mutex_destroy(mutex_t *mut)
 {
-    int rc = 0;
+    status_t rc = STATUS_OK;
 
 #if defined(IS_WINDOWS)
     CloseHandle(mut);
 #else
     if(pthread_mutex_destroy(mut)) {
-        rc = 1;
+        rc = STATUS_ERR_OP_FAILED;
     }
 #endif
 

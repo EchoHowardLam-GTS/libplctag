@@ -97,46 +97,67 @@ typedef enum plc_type_t {
 
 const uint32_t MAX_DEVICE_BUFFER_SIZE = (8192);
 
+const uint8_t MAX_CIP_DEVICE_PATH_WORDS = (20);
 
 typedef struct {
     struct tcp_connection_t tcp_connection;
+
+    /* PLC info */
+    plc_type_t plc_type;
+    const char *port_string;
+    tag_def_p tags;
 
     /* EIP info */
     uint32_t session_handle;
     uint64_t sender_context;
 
     /* CIP info */
-    bool has_cip_connection;
-
     uint32_t client_to_server_max_packet;
     uint32_t server_to_client_max_packet;
 
+    /* CIP device path */
+    uint8_t path[MAX_CIP_DEVICE_PATH_WORDS*2];
+    uint8_t path_len;
+
     /* CIP connection info */
+    bool has_cip_connection;
+
     uint32_t client_connection_id;
     uint16_t client_connection_seq;
     uint32_t server_connection_id;
     uint16_t server_connection_seq;
 
-    /* PLC info we might need */
-    plc_type_t plc_type;
-    const char *port_string;
-    tag_def_p tags;
-
     /* debugging */
     uint32_t response_delay;
+    int reject_fo_count;
 
-    /* a buffer for requests and responses */
-    uint8_t request_buffer_data[MAX_DEVICE_BUFFER_SIZE];
-    uint8_t response_buffer_data[MAX_DEVICE_BUFFER_SIZE];
+    /* buffer for requests and responses */
+    uint8_t pdu_data_buffer[MAX_DEVICE_BUFFER_SIZE];
 } plc_connection_t;
 
 typedef plc_connection_t *plc_connection_p;
 
-typedef enum {
-    /* start off above the TCP connection status */
-    PLC_ERR_INSUFFICIENT_RESPONSE_DATA = TCP_CONNECTION_STATUS_LAST,
-    PLC_ERR_NOT_FOUND,
-} plc_status_t;
+
+
+#define GET_FIELD(SLICE, TYPE, ADDR, SIZE)                                    \
+        if(slice_get_ ## TYPE ## _le_at_offset((SLICE), offset, (ADDR))) {    \
+            warn("Unable to get field at offset %"PRIu32"!", offset);         \
+            rc = STATUS_ERR_OP_FAILED;                                            \
+            break;                                                            \
+        }                                                                     \
+        offset += (SIZE)
+
+
+#define SET_FIELD(SLICE, TYPE, VAL, SIZE)                                     \
+        if(slice_set_ ## TYPE ## _le_at_offset((SLICE), offset, (VAL))) {     \
+            warn("Unable to set field at offset %"PRIu32"!", offset);         \
+            rc = STATUS_ERR_OP_FAILED;                                            \
+            break;                                                            \
+        }                                                                     \
+        offset += (SIZE)
+
+
+
 
 
 #define assert_warn(COND, STATUS, ... ) if(!(COND)) {            \

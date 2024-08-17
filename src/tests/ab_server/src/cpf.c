@@ -31,34 +31,67 @@
  *   59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.             *
  ***************************************************************************/
 
+#include <inttypes.h>
 #include <stdint.h>
 #include "cip.h"
 #include "cpf.h"
 #include "plc.h"
 #include "utils/debug.h"
 #include "utils/slice.h"
+#include "utils/status.h"
 #include "utils/time_utils.h"
 
-#define CPF_ITEM_NAI ((uint16_t)0x0000) /* NULL Address Item */
-#define CPF_ITEM_CAI ((uint16_t)0x00A1) /* connected address item */
-#define CPF_ITEM_CDI ((uint16_t)0x00B1) /* connected data item */
-#define CPF_ITEM_UDI ((uint16_t)0x00B2) /* Unconnected data item */
+const uint16_t CPF_ITEM_NAI = ((uint16_t)0x0000); /* NULL Address Item */
+const uint16_t CPF_ITEM_CAI = ((uint16_t)0x00A1); /* connected address item */
+const uint16_t CPF_ITEM_CDI = ((uint16_t)0x00B1); /* connected data item */
+const uint16_t CPF_ITEM_UDI = ((uint16_t)0x00B2); /* Unconnected data item */
+
+
+const uint32_t CPF_CONN_HEADER_SIZE = 22;
+const uint32_t CPF_UCONN_HEADER_SIZE = 16;
+
+
+typedef struct {
+    uint32_t interface_handle;
+    uint16_t router_timeout;
+    uint16_t item_count;
+    uint16_t item_addr_type;
+    uint16_t item_addr_length;
+    uint16_t item_data_type;
+    uint16_t item_data_length;
+} cpf_uc_header_t;
+
+
+typedef struct {
+    uint32_t interface_handle;
+    uint16_t router_timeout;
+    uint16_t item_count;        /* should be 2 for now. */
+    uint16_t item_addr_type;
+    uint16_t item_addr_length;
+    uint32_t conn_id;
+    uint16_t item_data_type;
+    uint16_t item_data_length;
+    uint16_t conn_seq;
+} cpf_co_header_t;
 
 
 
-
-tcp_connection_status_t cpf_dispatch_connected_request(slice_p request, slice_p response, tcp_connection_p connection_arg)
+status_t cpf_dispatch_connected_request(slice_p request, slice_p response, plc_connection_p connection)
 {
-    tcp_connection_status_t conn_rc = TCP_CONNECTION_PDU_STATUS_OK;
-    plc_connection_p connection = (plc_connection_p)connection_arg;
-    slice_status_t slice_rc;
+    status_t rc = STATUS_OK;
     uint8_t *saved_start = response->start;
     uint8_t *cip_start = NULL;
     uint16_t payload_size = 0;
+    cpf_co_header_t header = {0};
+    slice_t request_payload_slice = {0};
+    slice_t response_header_slice = {0};
+    slice_t response_payload_slice = {0};
 
     do {
+        uint32_t offset = 0;
+
         /* we must have some sort of payload. */
-        assert_warn((slice_len(request) >= CPF_CONN_HEADER_SIZE), TCP_CONNECTION_PDU_ERR_INCOMPLETE, "Unusable size of connected CPF packet!");
+        assert_warn((slice_get_len(request) >= CPF_CONN_HEADER_SIZE), STATUS_ERR_RESOURCE, "Insufficient data in CPF PDU!");
 
         /*
             uint32_t interface_handle;
@@ -72,83 +105,95 @@ tcp_connection_status_t cpf_dispatch_connected_request(slice_p request, slice_p 
             uint16_t conn_seq;
         */
 
-        slice_rc = slice_unpack(request, "u4,u2,u2,u2,u2,u4,u2,^,u2",
-                                        &connection->cpf_connection.co_header.interface_handle,
-                                        &connection->cpf_connection.co_header.router_timeout,
-                                        &connection->cpf_connection.co_header.item_count,
-                                        &connection->cpf_connection.co_header.item_addr_type,
-                                        &connection->cpf_connection.co_header.item_addr_length,
-                                        &connection->cpf_connection.co_header.conn_id,
-                                        &connection->cpf_connection.co_header.item_data_type,
-                                        &connection->cpf_connection.co_header.item_data_length,
-                                        &cip_start,
-                                        &connection->cpf_connection.co_header.conn_seq
-                            );
+        GET_FIELD(request, u32, &(header.interface_handle), sizeof(header.interface_handle));
+        GET_FIELD(request, u16, &(header.router_timeout), sizeof(header.router_timeout));
+        GET_FIELD(request, u16, &(header.item_count), sizeof(header.item_count));
+        GET_FIELD(request, u16, &(header.item_addr_type), sizeof(header.item_addr_type));
+        GET_FIELD(request, u16, &(header.item_addr_length), sizeof(header.item_addr_length));
+        GET_FIELD(request, u32, &(header.conn_id), sizeof(header.conn_id));
+        GET_FIELD(request, u16, &(header.item_data_type), sizeof(header.item_data_type));
+        GET_FIELD(request, u16, &(header.item_data_length), sizeof(header.item_data_length));
+        GET_FIELD(request, u16, &(header.conn_seq), sizeof(header.conn_seq));
 
-        assert_error((slice_rc == SLICE_STATUS_OK), "Error unpacking slice %d!", slice_rc);
+        /* sanity check the header */
+        assert_warn((header.item_count == (uint16_t)2), STATUS_ERR_PARAM, "Malformed connected CPF packet, expected two CPF itemas but got %u!", header.item_count);
 
-        assert_warn((connection->cpf_connection.co_header.item_count == (uint16_t)2), TCP_CONNECTION_PDU_ERR_MALFORMED, "Malformed connected CPF packet, expected two CPF itemas but got %u!", connection->cpf_connection.co_header.item_count);
+        assert_warn((header.item_addr_type == CPF_ITEM_CAI), STATUS_ERR_PARAM, "Unsupported connected CPF packet, expected connected address item type but got %u!", header.item_addr_type);
 
-        assert_warn((connection->cpf_connection.co_header.item_addr_type == CPF_ITEM_CAI), TCP_CONNECTION_PDU_ERR_MALFORMED, "Unsupported connected CPF packet, expected connected address item type but got %u!", connection->cpf_connection.co_header.item_addr_type);
+        assert_warn((header.item_addr_length == 0x04), STATUS_ERR_PARAM, "Unsupported connected CPF packet, expected connected address item length of 4 but got %u!", header.item_addr_length);
 
-        assert_warn((connection->cpf_connection.co_header.item_addr_size == 0x04), TCP_CONNECTION_PDU_ERR_MALFORMED, "Unsupported connected CPF packet, expected connected address item length of 4 but got %u!", connection->cpf_connection.co_header.item_addr_length);
+        assert_warn((header.item_data_type == CPF_ITEM_CDI), STATUS_ERR_NOT_RECOGNIZED, "Unsupported connected CPF packet, expected connected address item type but got %u!", header.item_addr_type);
 
-        assert_warn((connection->cpf_connection.co_header.item_data_type == CPF_ITEM_CDI), TCP_CONNECTION_PDU_ERR_MALFORMED, "Unsupported connected CPF packet, expected connected address item type but got %u!", connection->cpf_connection.co_header.item_addr_type);
+        assert_warn((header.conn_id == connection->server_connection_id), STATUS_ERR_PARAM, "Expected server connection ID %08x but found connection ID %08x!", connection->server_connection_id, header.conn_id);
 
-        assert_warn((connection->cpf_connection.co_header.conn_id == connection->cip_connection.server_connection_id), TCP_CONNECTION_PDU_ERR_MALFORMED, "Expected connection ID %04x but found connection ID %04x!", connection->cip_connection.server_connection_id, connection->cpf_connection.co_header.conn_id);
+        assert_warn((header.item_data_length == slice_len(request) - offset + 2), STATUS_ERR_PARAM, "CPF data item length, %d, does not actual payload length, %d!", header.item_data_length, slice_len(request) - offset + 2);
 
-        assert_warn((connection->cpf_connection.co_header.item_data_length == (uint16_t)(request->end - cip_start)), TCP_CONNECTION_PDU_ERR_MALFORMED, "CPF payload length, %d, does not match passed length, %d!", (buf_len(request) - cip_start_offset), connection->cpf_connection.co_header.item_data_length);
+        /* store the client connection sequence ID */
+        connection->server_connection_seq = header.conn_seq;
 
-        /* set up response. */
-        saved_start = response->start;
-        response->start += CPF_CONN_HEADER_SIZE;
+        /* split up the request to get the payload */
+        if(!slice_split_at_offset(request, offset, NULL, &request_payload_slice)) {
+            warn("Unable split request slice!");
+            break;
+        }
 
-        conn_rc = cip_dispatch_request(request, response, connection_arg);
+        /* split up the response to get the header and payload slices. */
+        if(!slice_split_at_offset(response, offset, &response_header_slice, &response_payload_slice)) {
+            warn("Unable split response slice!");
+            break;
+        }
 
-        payload_size = (uint16_t)(response->end - cip_start);
+        rc = cip_dispatch_request(&request_payload_slice, &response_payload_slice, connection);
+        if(rc != STATUS_OK) {
+            warn("Unable to dispatch CIP request!");
+            break;
+        }
 
-        assert_warn((conn_rc != TCP_CONNECTION_PDU_STATUS_OK), TCP_CONNECTION_PDU_ERR_MALFORMED, "CIP layer processing failed!");
+        /* build up the response.  */
+        connection->client_connection_seq++;
+        offset = 0;
+        SET_FIELD(&response_header_slice, u32, header.interface_handle, sizeof(header.interface_handle));
+        SET_FIELD(&response_header_slice, u16, header.router_timeout, sizeof(header.router_timeout));
+        SET_FIELD(&response_header_slice, u16, header.item_count, sizeof(header.item_count));
+        SET_FIELD(&response_header_slice, u16, header.item_addr_type, sizeof(header.item_addr_type));
+        SET_FIELD(&response_header_slice, u16, header.item_addr_length, sizeof(header.item_addr_length));
+        SET_FIELD(&response_header_slice, u32, connection->client_connection_id, sizeof(header.conn_id));
+        SET_FIELD(&response_header_slice, u16, header.item_data_type, sizeof(header.item_data_type));
+        SET_FIELD(&response_header_slice, u16, (uint16_t)(slice_len(&response_payload_slice) + 2), sizeof(header.item_data_length));
+        SET_FIELD(&response_header_slice, u16, connection->client_connection_seq, sizeof(header.conn_seq));
 
-        /* reset the response start to where it was. */
-        response->start = saved_start;
+        detail("CPF response has a payload of %"PRIu32" bytes.", slice_get_len(&response_payload_slice));
 
-        slice_rc = slice_pack(response, "u4,u2,u2,u2,u2,u4,u2,u2",
-                                        connection->cpf_connection.co_header.interface_handle,
-                                        connection->cpf_connection.co_header.router_timeout,
-                                        connection->cpf_connection.co_header.item_count,
-                                        connection->cpf_connection.co_header.item_addr_type,
-                                        connection->cpf_connection.co_header.item_addr_length,
-                                        connection->cpf_connection.co_header.conn_id,
-                                        connection->cpf_connection.co_header.item_data_type,
-                                        payload_size,
-                                        connection->cpf_connection.co_header.conn_seq
-                            );
-
-        assert_error((slice_rc == SLICE_STATUS_OK), "Error packing response slice %d!", slice_rc);
-
-        /* let the previous layer handle the response */
+        /* truncate the response to the header plus payload */
+        if(!slice_truncate_to_offset(response, slice_get_len(&response_header_slice) + slice_get_len(&response_payload_slice))) {
+            warn("Unable to truncate response slice!");
+            rc = STATUS_ERR_OP_FAILED;
+            break;
+        }
     } while(0);
 
-    /* errors are passed through. */
-
-    return conn_rc;
+    return rc;
 }
 
 
 int cpf_dispatch_unconnected_request(slice_p request, slice_p response, tcp_connection_p connection_arg)
 {
-    tcp_connection_status_t conn_rc = TCP_CONNECTION_PDU_STATUS_OK;
-    slice_status_t slice_rc = SLICE_STATUS_OK;
+    status_t rc = STATUS_OK;
     plc_connection_p connection = (plc_connection_p)connection_arg;
-    uint8_t *saved_start = NULL;
-    uint16_t payload_size = 0;
+    cpf_uc_header_t header = {0};
+    slice_t request_header_slice = {0};
+    slice_t request_payload_slice = {0};
+    slice_t response_header_slice = {0};
+    slice_t response_payload_slice = {0};
 
     info("got request:");
     debug_dump_buf(DEBUG_INFO, request->start, request->end);
 
     do {
+        uint32_t offset = 0;
+
         /* we must have some sort of payload. */
-        assert_warn((slice_len(request) >= CPF_UCONN_HEADER_SIZE), TCP_CONNECTION_PDU_ERR_INCOMPLETE, "Unusable size of connected CPF packet!");
+        assert_warn((slice_get_len(request) >= CPF_UCONN_HEADER_SIZE), STATUS_ERR_RESOURCE, "Unusable size of connected CPF packet!");
 
         /*
             uint32_t interface_handle;
@@ -160,56 +205,62 @@ int cpf_dispatch_unconnected_request(slice_p request, slice_p response, tcp_conn
             uint16_t item_data_length;
         */
 
-        slice_rc = slice_unpack(request, "u4,u2,u2,u2,u2,u2,u2",
-                                          &connection->cpf_connection.uc_header.interface_handle,
-                                          &connection->cpf_connection.uc_header.router_timeout,
-                                          &connection->cpf_connection.uc_header.item_count,
-                                          &connection->cpf_connection.uc_header.item_addr_type,
-                                          &connection->cpf_connection.uc_header.item_addr_length,
-                                          &connection->cpf_connection.uc_header.item_data_type,
-                                          &connection->cpf_connection.uc_header.item_data_length
-                                );
+        GET_FIELD(request, u32, &(header.interface_handle), sizeof(header.interface_handle));
+        GET_FIELD(request, u16, &(header.router_timeout), sizeof(header.router_timeout));
+        GET_FIELD(request, u16, &(header.item_count), sizeof(header.item_count));
+        GET_FIELD(request, u16, &(header.item_addr_type), sizeof(header.item_addr_type));
+        GET_FIELD(request, u16, &(header.item_addr_length), sizeof(header.item_addr_length));
+        GET_FIELD(request, u16, &(header.item_data_type), sizeof(header.item_data_type));
+        GET_FIELD(request, u16, &(header.item_data_length), sizeof(header.item_data_length));
 
-        assert_error((slice_rc == SLICE_STATUS_OK), "Error unpacking slice %d!", slice_rc);
+        /* sanity check the header */
+        assert_warn((header.item_count == (uint16_t)2), STATUS_ERR_PARAM, "Malformed connected CPF packet, expected two CPF itemas but got %u!", header.item_count);
 
-        assert_warn((connection->cpf_connection.uc_header.item_count == (uint16_t)2), TCP_CONNECTION_PDU_ERR_MALFORMED, "Malformed connected CPF packet, expected two CPF itemas but got %u!", connection->cpf_connection.co_header.item_count);
+        assert_warn((header.item_addr_type == CPF_ITEM_NAI), STATUS_ERR_PARAM, "Unsupported connected CPF packet, expected connected address item type but got %u!", header.item_addr_type);
 
-        assert_warn((connection->cpf_connection.uc_header.item_addr_type == CPF_ITEM_NAI), TCP_CONNECTION_PDU_ERR_MALFORMED, "Unsupported connected CPF packet, expected connected address item type but got %u!", connection->cpf_connection.co_header.item_addr_type);
+        assert_warn((header.item_addr_length == (uint16_t)0), STATUS_ERR_PARAM, "Unsupported connected CPF packet, expected connected address item length of 0 but got %u!", header.item_addr_length);
 
-        assert_warn((connection->cpf_connection.uc_header.item_data_type == CPF_ITEM_UDI), TCP_CONNECTION_PDU_ERR_MALFORMED, "Unsupported connected CPF packet, expected connected address item type but got %u!", connection->cpf_connection.co_header.item_addr_type);
+        assert_warn((header.item_data_type == CPF_ITEM_UDI), STATUS_ERR_NOT_RECOGNIZED, "Unsupported connected CPF packet, expected connected address item type but got %u!", header.item_addr_type);
 
-        assert_warn((connection->cpf_connection.uc_header.item_data_length == (uint16_t)(request->end - cip_start)), TCP_CONNECTION_PDU_ERR_MALFORMED, "CPF payload length, %d, does not match passed length, %d!", (buf_len(request) - cip_start_offset), connection->cpf_connection.co_header.item_data_length);
+        assert_warn((header.item_data_length == slice_len(request) - offset), STATUS_ERR_PARAM, "CPF data item length, %d, does not match actual payload length, %d!", header.item_data_length, slice_len(request) - offset);
 
-        /* set up response. */
-        saved_start = response->start;
-        response->start += CPF_UCONN_HEADER_SIZE;
+        /* split up the request to get the payload */
+        if(!slice_split_at_offset(request, offset, NULL, &request_payload_slice)) {
+            warn("Unable split request slice!");
+            break;
+        }
 
-        conn_rc = cip_dispatch_request(request, response, connection_arg);
+        /* split up the response to get the header and payload slices. */
+        if(!slice_split_at_offset(response, offset, &response_header_slice, &response_payload_slice)) {
+            warn("Unable split response slice!");
+            break;
+        }
 
-        assert_warn((conn_rc != TCP_CONNECTION_PDU_STATUS_OK), TCP_CONNECTION_PDU_ERR_MALFORMED, "CIP layer processing failed!");
+        rc = cip_dispatch_request(&request_payload_slice, &response_payload_slice, connection);
+        if(rc != STATUS_OK) {
+            warn("Unable to dispatch CIP request!");
+            break;
+        }
 
-        payload_size = (uint16_t)slice_len(response);
+        /* build up the response.  */
+        offset = 0;
+        SET_FIELD(&response_header_slice, u32, header.interface_handle, sizeof(header.interface_handle));
+        SET_FIELD(&response_header_slice, u16, header.router_timeout, sizeof(header.router_timeout));
+        SET_FIELD(&response_header_slice, u16, header.item_count, sizeof(header.item_count));
+        SET_FIELD(&response_header_slice, u16, header.item_addr_type, sizeof(header.item_addr_type));
+        SET_FIELD(&response_header_slice, u16, header.item_addr_length, sizeof(header.item_addr_length));
+        SET_FIELD(&response_header_slice, u16, header.item_data_type, sizeof(header.item_data_type));
+        SET_FIELD(&response_header_slice, u16, (uint16_t)slice_len(&response_payload_slice), sizeof(header.item_data_length));
 
-        /* reset the response start to where it was. */
-        response->start = saved_start;
+        detail("CPF response has a payload of %"PRIu32" bytes.", slice_get_len(&response_payload_slice));
 
-        /* generate the CPF response header */
-        slice_rc = slice_pack(response, "u4,u2,u2,u2,u2,u2,u2",
-                                          connection->cpf_connection.uc_header.interface_handle,
-                                          connection->cpf_connection.uc_header.router_timeout,
-                                          connection->cpf_connection.uc_header.item_count,
-                                          connection->cpf_connection.uc_header.item_addr_type,
-                                          connection->cpf_connection.uc_header.item_addr_length,
-                                          connection->cpf_connection.uc_header.item_data_type,
-                                          payload_size
-                            );
-
-        assert_error((slice_rc == SLICE_STATUS_OK), "Error packing response slice %d!", slice_rc);
-
-        /* let the previous layer handle the response */
+        /* truncate the response to the header plus payload */
+        if(!slice_truncate_to_offset(response, slice_get_len(&response_header_slice) + slice_get_len(&response_payload_slice))) {
+            warn("Unable to truncate response slice!");
+            rc = STATUS_ERR_OP_FAILED;
+            break;
+        }
     } while(0);
 
-    /* errors are pass through. */
-
-    return conn_rc;
+    return rc;
 }

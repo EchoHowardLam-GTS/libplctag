@@ -42,40 +42,40 @@
 #include "util.h"
 
 
-static slice_status_t fix_up_alignment(char alignment_char, slice_p full_data_slice, slice_p unprocessed_data_slice);
-static slice_status_t decode_signed_int(const char int_size_char, bool little_endian, bool word_swap, slice_p unprocessed_data, void *dest);
-static slice_status_t encode_signed_int(const char int_size_char, bool little_endian, bool word_swap, va_list va, slice_p unprocessed_data);
-static slice_status_t decode_unsigned_int(const char int_size_char, bool little_endian, bool word_swap, slice_p unprocessed_data, void *data);
-static slice_status_t encode_unsigned_int(const char int_size_char, bool little_endian, bool word_swap, va_list va, slice_p unprocessed_data);
-static slice_status_t encode_unsigned_int_impl(const char int_size_char, bool little_endian, bool word_swap, slice_p unprocessed_data, uint64_t val_arg);
-static slice_status_t decode_float(const char int_size_char, bool little_endian, bool word_swap, slice_p unprocessed_data, void *data);
-static slice_status_t encode_float(const char int_size_char, bool little_endian, bool word_swap, va_list va, slice_p unprocessed_data);
-static slice_status_t decode_counted_byte_string(const char int_size_char, bool little_endian, bool word_swap, uint32_t multiplier, slice_p unprocessed_data, slice_p dest);
-static slice_status_t encode_counted_byte_string(const char int_size_char, bool little_endian, bool word_swap, bool byte_swap, uint32_t multiplier, slice_p unused_data_slice, slice_p src);
-static slice_status_t decode_terminated_byte_string(slice_p fmt_slice, slice_p unprocessed_data, slice_p dest);
-static slice_status_t encode_terminated_byte_string(slice_p fmt_slice, bool byte_swap, slice_p unused_data_slice, slice_p src);
-static slice_status_t check_or_allocate(slice_p slice, uint32_t required_size);
+static status_t fix_up_alignment(char alignment_char, slice_p full_data_slice, slice_p unprocessed_data_slice);
+static status_t decode_signed_int(const char int_size_char, bool little_endian, bool word_swap, slice_p unprocessed_data, void *dest);
+static status_t encode_signed_int(const char int_size_char, bool little_endian, bool word_swap, va_list va, slice_p unprocessed_data);
+static status_t decode_unsigned_int(const char int_size_char, bool little_endian, bool word_swap, slice_p unprocessed_data, void *data);
+static status_t encode_unsigned_int(const char int_size_char, bool little_endian, bool word_swap, va_list va, slice_p unprocessed_data);
+static status_t encode_unsigned_int_impl(const char int_size_char, bool little_endian, bool word_swap, slice_p unprocessed_data, uint64_t val_arg);
+static status_t decode_float(const char int_size_char, bool little_endian, bool word_swap, slice_p unprocessed_data, void *data);
+static status_t encode_float(const char int_size_char, bool little_endian, bool word_swap, va_list va, slice_p unprocessed_data);
+static status_t decode_counted_byte_string(const char int_size_char, bool little_endian, bool word_swap, uint32_t multiplier, slice_p unprocessed_data, slice_p dest);
+static status_t encode_counted_byte_string(const char int_size_char, bool little_endian, bool word_swap, bool byte_swap, uint32_t multiplier, slice_p unused_data_slice, slice_p src);
+static status_t decode_terminated_byte_string(slice_p fmt_slice, slice_p unprocessed_data, slice_p dest);
+static status_t encode_terminated_byte_string(slice_p fmt_slice, bool byte_swap, slice_p unused_data_slice, slice_p src);
+static status_t check_or_allocate(slice_p slice, uint32_t required_size);
 uint32_t *get_byte_order(size_t size, bool little_endian, bool word_swap);
 
 
-slice_status_t slice_to_string(slice_p slice, char *result, uint32_t result_size, bool byte_swap)
+status_t slice_to_string(slice_p slice, char *result, uint32_t result_size, bool byte_swap)
 {
-    slice_status_t rc = SLICE_STATUS_OK;
+    status_t rc = STATUS_OK;
     uint32_t slice_length = 0;
     uint32_t str_length_required = 0;
 
     do {
         if(!slice) {
             warn("Slice pointer must not be NULL!");
-            rc =  SLICE_ERR_NULL_PTR;
+            rc =  STATUS_ERR_NULL_PTR;
             break;
         }
 
-        slice_length = slice_len(slice);
+        slice_length = slice_get_len(slice);
 
         if(!result) {
             warn("Result pointer must not be NULL!");
-            rc =  SLICE_ERR_NULL_PTR;
+            rc =  STATUS_ERR_NULL_PTR;
             break;
         }
 
@@ -113,9 +113,9 @@ slice_status_t slice_to_string(slice_p slice, char *result, uint32_t result_size
 }
 
 
-slice_status_t string_to_slice(const char *source, slice_p dest, bool byte_swap)
+status_t string_to_slice(const char *source, slice_p dest, bool byte_swap)
 {
-    slice_status_t rc = SLICE_STATUS_OK;
+    status_t rc = STATUS_OK;
     uint32_t slice_length = 0;
     uint32_t slice_length_required = 0;
     uint32_t str_length = 0;
@@ -123,7 +123,7 @@ slice_status_t string_to_slice(const char *source, slice_p dest, bool byte_swap)
     do {
         if(!source) {
             warn("Source pointer must not be NULL!");
-            rc =  SLICE_ERR_NULL_PTR;
+            rc =  STATUS_ERR_NULL_PTR;
             break;
         }
 
@@ -131,11 +131,11 @@ slice_status_t string_to_slice(const char *source, slice_p dest, bool byte_swap)
 
         if(!dest) {
             warn("Slice pointer must not be NULL!");
-            rc =  SLICE_ERR_NULL_PTR;
+            rc =  STATUS_ERR_NULL_PTR;
             break;
         }
 
-        slice_length = slice_len(dest);
+        slice_length = slice_get_len(dest);
 
         slice_length_required = str_length;
 
@@ -144,7 +144,7 @@ slice_status_t string_to_slice(const char *source, slice_p dest, bool byte_swap)
             slice_length_required += 1;
         }
 
-        if(slice_length_required > slice_len(dest)) {
+        if(slice_length_required > slice_get_len(dest)) {
             warn("Insufficient space in the destination slice!");
             rc = SLICE_ERR_TOO_LITTLE_SPACE;
             break;
@@ -176,7 +176,7 @@ slice_status_t string_to_slice(const char *source, slice_p dest, bool byte_swap)
 
 
 
-slice_status_t slice_from_slice(slice_p parent, slice_p new_slice, uint8_t *start, uint8_t *end)
+status_t slice_from_slice(slice_p parent, slice_p new_slice, uint8_t *start, uint8_t *end)
 {
     intptr_t parent_start = 0;
     intptr_t parent_end = 0;
@@ -185,22 +185,22 @@ slice_status_t slice_from_slice(slice_p parent, slice_p new_slice, uint8_t *star
 
     if(!parent) {
         warn("Parent pointer cannot be NULL!");
-        return SLICE_ERR_NULL_PTR;
+        return STATUS_ERR_NULL_PTR;
     }
 
     if(!new_slice) {
         warn("New slice pointer cannot be NULL!");
-        return SLICE_ERR_NULL_PTR;
+        return STATUS_ERR_NULL_PTR;
     }
 
     if(!start) {
         warn("Start pointer cannot be NULL!");
-        return SLICE_ERR_NULL_PTR;
+        return STATUS_ERR_NULL_PTR;
     }
 
     if(!end) {
         warn("End pointer cannot be NULL!");
-        return SLICE_ERR_NULL_PTR;
+        return STATUS_ERR_NULL_PTR;
     }
 
     parent_start = (intptr_t)(parent->start);
@@ -226,13 +226,13 @@ slice_status_t slice_from_slice(slice_p parent, slice_p new_slice, uint8_t *star
     new_slice->start = start;
     new_slice->end = end;
 
-    return SLICE_STATUS_OK;
+    return STATUS_OK;
 }
 
 
 bool slice_get_u16_le_at_ptr(slice_p slice, uint8_t *ptr, uint16_t *val)
 {
-    if(slice && ptr && val && slice_contains_ptr(slice, ptr) && slice_len_from_ptr(slice, ptr) >= sizeof(*val)) {
+    if(slice && ptr && val && slice_contains_ptr(slice, ptr) && slice_get_len_from_ptr(slice, ptr) >= sizeof(*val)) {
         *val = 0;
 
         *val |= (uint16_t)*(ptr);
@@ -246,7 +246,7 @@ bool slice_get_u16_le_at_ptr(slice_p slice, uint8_t *ptr, uint16_t *val)
 
 bool slice_set_u16_le_at_ptr(slice_p slice, uint8_t *ptr, uint16_t val)
 {
-    if(slice && ptr && val && slice_contains_ptr(slice, ptr) && slice_len_from_ptr(slice, ptr) >= sizeof(val)) {
+    if(slice && ptr && val && slice_contains_ptr(slice, ptr) && slice_get_len_from_ptr(slice, ptr) >= sizeof(val)) {
         *ptr  = (uint8_t)(val & 0xFF);
         *(ptr + 1) = (uint8_t)((val >> 8) & 0xFF);
 
@@ -259,7 +259,7 @@ bool slice_set_u16_le_at_ptr(slice_p slice, uint8_t *ptr, uint16_t val)
 
 bool slice_get_u32_le_at_ptr(slice_p slice, uint8_t *ptr, uint32_t *val)
 {
-    if(slice && ptr && val && slice_contains_ptr(slice, ptr) && slice_len_from_ptr(slice, ptr) >= sizeof(*val)) {
+    if(slice && ptr && val && slice_contains_ptr(slice, ptr) && slice_get_len_from_ptr(slice, ptr) >= sizeof(*val)) {
         *val = 0;
 
         *val |= (uint32_t)*(ptr);
@@ -275,7 +275,7 @@ bool slice_get_u32_le_at_ptr(slice_p slice, uint8_t *ptr, uint32_t *val)
 
 bool slice_set_u32_le_at_ptr(slice_p slice, uint8_t *ptr, uint32_t val)
 {
-    if(slice && ptr && val && slice_contains_ptr(slice, ptr) && slice_len_from_ptr(slice, ptr) >= sizeof(val)) {
+    if(slice && ptr && val && slice_contains_ptr(slice, ptr) && slice_get_len_from_ptr(slice, ptr) >= sizeof(val)) {
         *ptr  = (uint8_t)(val & 0xFF);
         *(ptr + 1) = (uint8_t)((val >> 8) & 0xFF);
         *(ptr + 2) = (uint8_t)((val >> 16) & 0xFF);
@@ -290,7 +290,7 @@ bool slice_set_u32_le_at_ptr(slice_p slice, uint8_t *ptr, uint32_t val)
 
 bool slice_get_u64_le_at_ptr(slice_p slice, uint8_t *ptr, uint64_t *val)
 {
-    if(slice && ptr && val && slice_contains_ptr(slice, ptr) && slice_len_from_ptr(slice, ptr) >= sizeof(*val)) {
+    if(slice && ptr && val && slice_contains_ptr(slice, ptr) && slice_get_len_from_ptr(slice, ptr) >= sizeof(*val)) {
         *val = 0;
 
         *val |= (uint64_t)*(ptr);
@@ -310,7 +310,7 @@ bool slice_get_u64_le_at_ptr(slice_p slice, uint8_t *ptr, uint64_t *val)
 
 bool slice_set_u64_le_at_ptr(slice_p slice, uint8_t *ptr, uint64_t val)
 {
-    if(slice && ptr && val && slice_contains_ptr(slice, ptr) && slice_len_from_ptr(slice, ptr) >= sizeof(val)) {
+    if(slice && ptr && val && slice_contains_ptr(slice, ptr) && slice_get_len_from_ptr(slice, ptr) >= sizeof(val)) {
         *ptr  = (uint8_t)(val & 0xFF);
         *(ptr + 1) = (uint8_t)((val >> 8) & 0xFF);
         *(ptr + 2) = (uint8_t)((val >> 16) & 0xFF);

@@ -37,8 +37,10 @@
 #include "utils/slice.h"
 #include "utils/tcp_server.h"
 
+#include "utils/status.h"
+
 /* EIP header size is 24 bytes. */
-#define EIP_HEADER_SIZE (24)
+const uint32_t EIP_HEADER_SIZE = (24);
 
 
 typedef struct {
@@ -48,18 +50,8 @@ typedef struct {
     uint32_t status;
     uint64_t sender_context;
     uint32_t options;
+} eip_pdu_header_t;
 
-    slice_t payload;
-} eip_pdu_t;
+typedef eip_pdu_header_t *eip_pdu_header_p;
 
-typedef eip_pdu_t *eip_pdu_p;
-
-// typedef struct {
-//     eip_pdu_t eip_header;
-
-//     int response_delay;
-// } eip_connection_t;
-
-// typedef eip_connection_t *eip_connection_p;
-
-extern tcp_connection_t eip_dispatch_request(slice_p request, slice_p response, tcp_connection_p connection_arg);
+extern status_t eip_dispatch_request(slice_p request, slice_p response, tcp_connection_p connection_arg);

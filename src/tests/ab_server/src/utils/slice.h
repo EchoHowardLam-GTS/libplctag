@@ -36,16 +36,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-
-
-typedef enum {
-    SLICE_STATUS_OK,
-    SLICE_ERR_NULL_PTR,
-    SLICE_ERR_INSUFFICIENT_DATA,
-    SLICE_ERR_INSUFFICIENT_SPACE,
-    SLICE_ERR_DECODE,
-    SLICE_ERR_ENCODE,
-} slice_status_t;
+#include "status.h"
 
 
 typedef struct slice_t {
@@ -59,17 +50,16 @@ typedef slice_t *slice_p;
 #define SLICE_STATIC_INIT(START, END) { .start = (START), .end = (END) }
 
 
-
-static inline slice_status_t slice_init(slice_p slice, uint8_t *start, uint8_t *end)
+static inline status_t slice_init(slice_p slice, uint8_t *start, uint8_t *end)
 {
     if(slice) {
         slice->start = start;
         slice->end = end;
 
-        return SLICE_STATUS_OK;
+        return STATUS_OK;
     }
 
-    return SLICE_ERR_NULL_PTR;
+    return STATUS_ERR_NULL_PTR;
 }
 
 
@@ -88,7 +78,7 @@ static inline bool slice_contains_slice(slice_p outer, slice_p inner)
     return outer && inner && ((intptr_t)(outer->start) <= (intptr_t)(inner->start) && (intptr_t)(inner->end) <= (intptr_t)(outer->end));
 }
 
-static inline uint32_t slice_len(slice_p slice)
+static inline uint32_t slice_get_len(slice_p slice)
 {
     if(slice && slice->start && slice->end) {
         if((uintptr_t)(slice->end) >= (uintptr_t)(slice->start)) {
@@ -100,7 +90,7 @@ static inline uint32_t slice_len(slice_p slice)
 }
 
 
-static inline uint32_t slice_len_to_ptr(slice_p slice, uint8_t *ptr)
+static inline uint32_t slice_get_len_to_ptr(slice_p slice, uint8_t *ptr)
 {
     if(slice && ptr && slice_contains_ptr(slice, ptr)) {
         return (uint32_t)((intptr_t)(ptr) - (intptr_t)(slice->start));
@@ -110,7 +100,7 @@ static inline uint32_t slice_len_to_ptr(slice_p slice, uint8_t *ptr)
 }
 
 /* this doesn't really do anything but does error check the passed slice pointer */
-static inline uint32_t slice_len_to_offset(slice_p slice, uint32_t offset)
+static inline uint32_t slice_get_len_to_offset(slice_p slice, uint32_t offset)
 {
     if(slice) {
         return offset;
@@ -119,7 +109,7 @@ static inline uint32_t slice_len_to_offset(slice_p slice, uint32_t offset)
     return 0;
 }
 
-static inline uint32_t slice_len_from_ptr(slice_p slice, uint8_t *ptr)
+static inline uint32_t slice_get_len_from_ptr(slice_p slice, uint8_t *ptr)
 {
     if(slice && ptr && slice_contains_ptr(slice, ptr)) {
         return (uint32_t)((intptr_t)(slice->end) - (intptr_t)(ptr));
@@ -128,14 +118,32 @@ static inline uint32_t slice_len_from_ptr(slice_p slice, uint8_t *ptr)
     return 0;
 }
 
-static inline uint32_t slice_len_from_offset(slice_p slice, uint32_t offset)
+static inline uint32_t slice_get_len_from_offset(slice_p slice, uint32_t offset)
 {
     if(slice) {
-        return slice_len_from_ptr(slice, slice->start + offset);
+        return slice_get_len_from_ptr(slice, slice->start + offset);
     }
 
     return 0;
 }
+
+
+static inline bool slice_truncate_to_ptr(slice_p slice, uint8_t *ptr)
+{
+    if(slice && ptr && slice_contains_ptr(slice, ptr)) {
+        slice->end = ptr;
+        return true;
+    }
+
+    return false;
+}
+
+static inline bool slice_truncate_to_offset(slice_p slice, uint32_t offset)
+{
+    return slice && slice_truncate_to_ptr(slice, slice->start + offset);
+}
+
+
 
 static inline bool slice_split_at_ptr(slice_p source, uint8_t *cut_ptr, slice_p first_part, slice_p second_part)
 {
@@ -164,9 +172,9 @@ static inline bool slice_split_at_offset(slice_p source, uint32_t offset, slice_
 
 
 
-extern slice_status_t slice_to_string(slice_p slice, char *result, uint32_t result_size, bool word_swap);
-extern slice_status_t string_to_slice(const char *source, slice_p dest, bool word_swap);
-extern slice_status_t slice_from_slice(slice_p parent, slice_p new_slice, uint8_t *start, uint8_t *end);
+extern status_t slice_to_string(slice_p slice, char *result, uint32_t result_size, bool word_swap);
+extern status_t string_to_slice(const char *source, slice_p dest, bool word_swap);
+extern status_t slice_from_slice(slice_p parent, slice_p new_slice, uint8_t *start, uint8_t *end);
 
 static inline bool slice_get_u8_ptr(slice_p slice, uint8_t *ptr, uint8_t *val)
 {

@@ -38,20 +38,13 @@
 #include <string.h>
 #include <time.h>
 
-// #if defined(IS_WINDOWS)
-// #include <Windows.h>
-// #else
-//  /* assume it is POSIX of some sort... */
-// #include <signal.h>
-// #include <strings.h>
-// #endif
-
 #include "eip.h"
 #include "plc.h"
 #include "arg_parser.h"
 #include "utils/compat.h"
 #include "utils/debug.h"
 #include "utils/slice.h"
+#include "utils/status.h"
 #include "utils/tcp_server.h"
 #include "utils/time_utils.h"
 
@@ -157,7 +150,7 @@ int main(int argc, const char **argv)
     }
 
     /* open a server connection and listen on the right port. */
-    tcp_server_run("0.0.0.0", (template_plc_connection.port_str ? template_plc_connection.port_str : "44818"), &done, allocate_client, (void *)&template_plc_connection);
+    tcp_server_run("0.0.0.0", (template_plc_connection.port_string ? template_plc_connection.port_string : "44818"), &done, allocate_client, (void *)&template_plc_connection);
 
     return 0;
 }
@@ -217,8 +210,10 @@ tcp_connection_p allocate_client(void *template_connection_arg)
     *connection = *template_connection;
 
     /* fill in anything that changes */
-    connection->tcp_connection.buffer.start = &(connection->buffer_data);
-    connection->tcp_connection.buffer.end = &(connection->buffer_data) + MAX_DEVICE_BUFFER_SIZE;
+    connection->tcp_connection.request_buffer.start = &(connection->pdu_data_buffer);
+    connection->tcp_connection.request_buffer.end = &(connection->pdu_data_buffer) + MAX_DEVICE_BUFFER_SIZE;
+    connection->tcp_connection.response_buffer.start = &(connection->pdu_data_buffer);
+    connection->tcp_connection.response_buffer.end = &(connection->pdu_data_buffer) + MAX_DEVICE_BUFFER_SIZE;
     connection->tcp_connection.handler = eip_dispatch_request;
 
     return (tcp_connection_p)connection;

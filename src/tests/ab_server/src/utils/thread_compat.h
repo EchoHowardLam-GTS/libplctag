@@ -35,6 +35,8 @@
 
 #include <stdbool.h>
 
+#include "status.h"
+
 
 #if defined(IS_WINDOWS)
     #include <processthreadsapi.h>
@@ -54,9 +56,13 @@
 #endif
 
 
-static inline bool thread_create(thread_t *t, thread_func_t func, thread_arg_t arg)
+static inline status_t thread_create(thread_t *t, thread_func_t func, thread_arg_t arg)
 {
-    bool rc = false;
+    status_t rc = STATUS_OK;
+
+    if(!t) {
+        return STATUS_ERR_NULL_PTR;
+    }
 
     *t = NULL;
 
@@ -68,13 +74,13 @@ static inline bool thread_create(thread_t *t, thread_func_t func, thread_arg_t a
                     (DWORD)0,        /* use default creation flags  */
                     (LPDWORD)NULL);  /* do not need thread ID       */
     /* detatch so that the thread is cleaned up on exit. */
-    if(*t) { CloseHandle(t); }
+    if(*t) { CloseHandle(t); rc = STATUS_ERR_OP_FAILED; }
     else { rc = true; }
 #else
     if(!pthread_create(t, NULL, func, arg)) {
         pthread_detach(*t);
     } else {
-        rc = true;
+        rc = STATUS_ERR_OP_FAILED;
     }
 #endif
 
