@@ -41,16 +41,10 @@
 typedef enum {
     SLICE_STATUS_OK,
     SLICE_ERR_NULL_PTR,
-    SLICE_ERR_TOO_LITTLE_DATA,
-    SLICE_ERR_TOO_MUCH_DATA,
-    SLICE_ERR_TOO_LITTLE_SPACE,
-    SLICE_ERR_UNSUPPORTED_FORMAT,
-    SLICE_ERR_INCOMPLETE_FORMAT,
-    SLICE_ERR_INCORRECT_FORMAT,
-    SLICE_ERR_BAD_PARAM,
-    SLICE_ERR_OUT_OF_BOUNDS,
-    SLICE_ERR_NOT_FOUND,
-    SLICE_ERR_OVERFLOW,
+    SLICE_ERR_INSUFFICIENT_DATA,
+    SLICE_ERR_INSUFFICIENT_SPACE,
+    SLICE_ERR_DECODE,
+    SLICE_ERR_ENCODE,
 } slice_status_t;
 
 
@@ -143,7 +137,7 @@ static inline uint32_t slice_len_from_offset(slice_p slice, uint32_t offset)
     return 0;
 }
 
-static inline bool slice_split_ptr(slice_p source, uint8_t *cut_ptr, slice_p first_part, slice_p second_part)
+static inline bool slice_split_at_ptr(slice_p source, uint8_t *cut_ptr, slice_p first_part, slice_p second_part)
 {
     /* only one of the parts must be not null */
     if(source && cut_ptr && slice_contains_ptr(source, cut_ptr) && (first_part || second_part)) {
@@ -163,9 +157,9 @@ static inline bool slice_split_ptr(slice_p source, uint8_t *cut_ptr, slice_p fir
     return false;
 }
 
-static inline bool slice_split_offset(slice_p source, uint32_t offset, slice_p first_part, slice_p second_part)
+static inline bool slice_split_at_offset(slice_p source, uint32_t offset, slice_p first_part, slice_p second_part)
 {
-    return source && slice_contains_offset(source, offset) && slice_split_ptr(source, source->start + offset, first_part, second_part);
+    return source && slice_contains_offset(source, offset) && slice_split_at_ptr(source, source->start + offset, first_part, second_part);
 }
 
 

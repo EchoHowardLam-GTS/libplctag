@@ -137,7 +137,7 @@ THREAD_FUNC(tcp_client_connection_handler, connection_ptr_arg)
             }
         } while(!*(connection->terminate)
                 && (sock_rc == SOCKET_STATUS_OK || sock_rc == SOCKET_ERR_TIMEOUT)
-                && conn_rc == TCP_CONNECTION_PDU_INCOMPLETE
+                && conn_rc == TCP_CONNECTION_PDU_ERR_INCOMPLETE
                );
 
         /* check the response. */

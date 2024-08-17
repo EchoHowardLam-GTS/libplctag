@@ -69,10 +69,23 @@ typedef enum {
     TCP_CONNECTION_PDU_STATUS_OK = 100,
 
     /* not enough infomation was read for a full PDU. */
-    TCP_CONNECTION_PDU_INCOMPLETE,
+    TCP_CONNECTION_PDU_ERR_INCOMPLETE,
 
     /* The request had something wrong with it. */
     TCP_CONNECTION_PDU_ERR_MALFORMED,
+
+    /* One or more fields/parameters were illegal or unexpected values. */
+    TCP_CONNECTION_PDU_ERR_BAD_PARAM,
+
+    /* Error decoding a request. */
+    TCP_CONNECTION_PDU_ERR_DECODE,
+
+    /* Error encoding a response. */
+    TCP_CONNECTION_PDU_ERR_ENCODE,
+
+    /* Error performing operation on slice. */
+    TCP_CONNECTION_PDU_ERR_SLICE,
+
 
     /* make any other status start here or above. */
     TCP_CONNECTION_STATUS_LAST = 200,
@@ -83,7 +96,7 @@ typedef enum {
     PDU_STATUS_OK = TCP_CONNECTION_PDU_STATUS_OK,
 
     /* PDU request incomplete/needs more data. */
-    PDU_ERR_INCOMPLETE = TCP_CONNECTION_PDU_INCOMPLETE,
+    PDU_ERR_INCOMPLETE = TCP_CONNECTION_PDU_ERR_INCOMPLETE,
 
     /* Internal error processing PDU */
     PDU_ERR_INTERNAL = TCP_CONNECTION_STATUS_LAST,
@@ -120,8 +133,9 @@ typedef struct tcp_connection_t {
 
     /* the following must be set up by the allocation function */
 
-    /* data buffer for requests and responses */
-    slice_t buffer;
+    /* data buffers for requests and responses */
+    slice_t request_buffer;
+    slice_t response_buffer;
 
     /* filled in by the application's allocator function */
     tcp_client_handler_func handler;

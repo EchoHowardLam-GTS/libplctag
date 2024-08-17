@@ -48,16 +48,18 @@ typedef struct {
     uint32_t status;
     uint64_t sender_context;
     uint32_t options;
-} eip_header_t;
 
-typedef eip_header_t *eip_header_p;
+    slice_t payload;
+} eip_pdu_t;
 
-typedef struct {
-    eip_header_t eip_header;
+typedef eip_pdu_t *eip_pdu_p;
 
-    int response_delay;
-} eip_connection_t;
+// typedef struct {
+//     eip_pdu_t eip_header;
 
-typedef eip_connection_t *eip_connection_p;
+//     int response_delay;
+// } eip_connection_t;
+
+// typedef eip_connection_t *eip_connection_p;
 
 extern tcp_connection_t eip_dispatch_request(slice_p request, slice_p response, tcp_connection_p connection_arg);

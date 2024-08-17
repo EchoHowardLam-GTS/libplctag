@@ -58,7 +58,7 @@ tcp_connection_status_t cpf_dispatch_connected_request(slice_p request, slice_p 
 
     do {
         /* we must have some sort of payload. */
-        assert_warn((slice_len(request) >= CPF_CONN_HEADER_SIZE), TCP_CONNECTION_PDU_INCOMPLETE, "Unusable size of connected CPF packet!");
+        assert_warn((slice_len(request) >= CPF_CONN_HEADER_SIZE), TCP_CONNECTION_PDU_ERR_INCOMPLETE, "Unusable size of connected CPF packet!");
 
         /*
             uint32_t interface_handle;
@@ -148,7 +148,7 @@ int cpf_dispatch_unconnected_request(slice_p request, slice_p response, tcp_conn
 
     do {
         /* we must have some sort of payload. */
-        assert_warn((slice_len(request) >= CPF_UCONN_HEADER_SIZE), TCP_CONNECTION_PDU_INCOMPLETE, "Unusable size of connected CPF packet!");
+        assert_warn((slice_len(request) >= CPF_UCONN_HEADER_SIZE), TCP_CONNECTION_PDU_ERR_INCOMPLETE, "Unusable size of connected CPF packet!");
 
         /*
             uint32_t interface_handle;

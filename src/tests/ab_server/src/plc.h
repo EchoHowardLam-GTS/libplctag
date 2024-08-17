@@ -42,35 +42,38 @@
 #include "utils/mutex_compat.h"
 
 
-typedef uint16_t tag_type_t;
+typedef uint16_t cip_tag_type_t;
 
 /* CIP data types. */
-#define TAG_CIP_TYPE_BOOL        ((tag_type_t)0x00C1) /* 8-bit boolean value */
-#define TAG_CIP_TYPE_SINT        ((tag_type_t)0x00C2) /* Signed 8–bit integer value */
-#define TAG_CIP_TYPE_INT         ((tag_type_t)0x00C3) /* Signed 16–bit integer value */
-#define TAG_CIP_TYPE_DINT        ((tag_type_t)0x00C4) /* Signed 32–bit integer value */
-#define TAG_CIP_TYPE_LINT        ((tag_type_t)0x00C5) /* Signed 64–bit integer value */
-#define TAG_CIP_TYPE_USINT       ((tag_type_t)0x00C6) /* Unsigned 8–bit integer value */
-#define TAG_CIP_TYPE_UINT        ((tag_type_t)0x00C7) /* Unsigned 16–bit integer value */
-#define TAG_CIP_TYPE_UDINT       ((tag_type_t)0x00C8) /* Unsigned 32–bit integer value */
-#define TAG_CIP_TYPE_ULINT       ((tag_type_t)0x00C9) /* Unsigned 64–bit integer value */
-#define TAG_CIP_TYPE_REAL        ((tag_type_t)0x00CA) /* 32–bit floating point value, IEEE format */
-#define TAG_CIP_TYPE_LREAL       ((tag_type_t)0x00CB) /* 64–bit floating point value, IEEE format */
+const cip_tag_type_t TAG_CIP_TYPE_BOOL        = ((cip_tag_type_t)0x00C1); /* 8-bit boolean value */
+const cip_tag_type_t TAG_CIP_TYPE_SINT        = ((cip_tag_type_t)0x00C2); /* Signed 8–bit integer value */
+const cip_tag_type_t TAG_CIP_TYPE_INT         = ((cip_tag_type_t)0x00C3); /* Signed 16–bit integer value */
+const cip_tag_type_t TAG_CIP_TYPE_DINT        = ((cip_tag_type_t)0x00C4); /* Signed 32–bit integer value */
+const cip_tag_type_t TAG_CIP_TYPE_LINT        = ((cip_tag_type_t)0x00C5); /* Signed 64–bit integer value */
+const cip_tag_type_t TAG_CIP_TYPE_USINT       = ((cip_tag_type_t)0x00C6); /* Unsigned 8–bit integer value */
+const cip_tag_type_t TAG_CIP_TYPE_UINT        = ((cip_tag_type_t)0x00C7); /* Unsigned 16–bit integer value */
+const cip_tag_type_t TAG_CIP_TYPE_UDINT       = ((cip_tag_type_t)0x00C8); /* Unsigned 32–bit integer value */
+const cip_tag_type_t TAG_CIP_TYPE_ULINT       = ((cip_tag_type_t)0x00C9); /* Unsigned 64–bit integer value */
+const cip_tag_type_t TAG_CIP_TYPE_REAL        = ((cip_tag_type_t)0x00CA); /* 32–bit floating point value, IEEE format */
+const cip_tag_type_t TAG_CIP_TYPE_LREAL       = ((cip_tag_type_t)0x00CB); /* 64–bit floating point value, IEEE format */
 
 // FIXME - this is wrong below!
-#define TAG_CIP_TYPE_STRING      ((tag_type_t)0x00D0) /* 88-byte string, with 82 bytes of data, 4-byte count and 2 bytes of padding */
+const cip_tag_type_t TAG_CIP_TYPE_STRING      = ((cip_tag_type_t)0x00D0); /* 88-byte string, with 82 bytes of data, 4-byte count and 2 bytes of padding */
 
 /* PCCC data types.   FIXME */
-#define TAG_PCCC_TYPE_INT         ((uint8_t)0x89) /* Signed 16–bit integer value */
-#define TAG_PCCC_TYPE_DINT        ((uint8_t)0x91) /* Signed 32–bit integer value */
-#define TAG_PCCC_TYPE_REAL        ((uint8_t)0x8a) /* 32–bit floating point value, IEEE format */
-#define TAG_PCCC_TYPE_STRING      ((uint8_t)0x8d) /* 82-byte string with 2-byte count word. */
+typedef uint8_t pccc_tag_type_t;
+
+const pccc_tag_type_t TAG_PCCC_TYPE_INT         = ((pccc_tag_type_t)0x89); /* Signed 16–bit integer value */
+const pccc_tag_type_t TAG_PCCC_TYPE_DINT        = ((pccc_tag_type_t)0x91); /* Signed 32–bit integer value */
+const pccc_tag_type_t TAG_PCCC_TYPE_REAL        = ((pccc_tag_type_t)0x8a); /* 32–bit floating point value, IEEE format */
+const pccc_tag_type_t TAG_PCCC_TYPE_STRING      = ((pccc_tag_type_t)0x8d); /* 82-byte string with 2-byte count word. */
+
 
 struct tag_def_t {
     struct tag_def_t *next_tag;
     char *name;
     mutex_t mutex; /* only one thread at a time can access. */
-    tag_type_t tag_type;
+    cip_tag_type_t tag_type;
     size_t elem_size;
     size_t elem_count;
     size_t data_file_num;
@@ -92,24 +95,39 @@ typedef enum plc_type_t {
 } plc_type_t;
 
 
-const uint32_t MAX_DEVICE_BUFFER_SIZE = (0x10000);
+const uint32_t MAX_DEVICE_BUFFER_SIZE = (8192);
+
 
 typedef struct {
     struct tcp_connection_t tcp_connection;
 
-    /* protocol-specific connection data */
-    eip_connection_t eip_connection;
-    cpf_connection_t cpf_connection;
-    cip_connection_t cip_connection;
-    pccc_connection_t pccc_connection;
+    /* EIP info */
+    uint32_t session_handle;
+    uint64_t sender_context;
+
+    /* CIP info */
+    bool has_cip_connection;
+
+    uint32_t client_to_server_max_packet;
+    uint32_t server_to_client_max_packet;
+
+    /* CIP connection info */
+    uint32_t client_connection_id;
+    uint16_t client_connection_seq;
+    uint32_t server_connection_id;
+    uint16_t server_connection_seq;
 
     /* PLC info we might need */
     plc_type_t plc_type;
     const char *port_string;
     tag_def_p tags;
 
+    /* debugging */
+    uint32_t response_delay;
+
     /* a buffer for requests and responses */
-    uint8_t buffer_data[MAX_DEVICE_BUFFER_SIZE];
+    uint8_t request_buffer_data[MAX_DEVICE_BUFFER_SIZE];
+    uint8_t response_buffer_data[MAX_DEVICE_BUFFER_SIZE];
 } plc_connection_t;
 
 typedef plc_connection_t *plc_connection_p;

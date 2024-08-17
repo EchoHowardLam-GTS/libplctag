@@ -41,26 +41,48 @@
 #include "utils/tcp_server.h"
 #include "utils/time_utils.h"
 
-#define EIP_REGISTER_SESSION     ((uint16_t)0x0065)
-#define EIP_UNREGISTER_SESSION   ((uint16_t)0x0066)
-#define EIP_UNCONNECTED_SEND     ((uint16_t)0x006F)
-#define EIP_CONNECTED_SEND       ((uint16_t)0x0070)
+typedef uint16_t eip_command_t;
 
-#define EIP_REGISTER_SESSION_SIZE (4) /* 4 bytes, 2 16-bit words */
+const eip_command_t EIP_REGISTER_SESSION     = ((eip_command_t)0x0065);
+const eip_command_t EIP_UNREGISTER_SESSION   = ((eip_command_t)0x0066);
+const eip_command_t EIP_UNCONNECTED_SEND     = ((eip_command_t)0x006F);
+const eip_command_t EIP_CONNECTED_SEND       = ((eip_command_t)0x0070);
+
+const uint16_t EIP_REGISTER_SESSION_SIZE  = ((size_t)4); /* 4 bytes, 2 16-bit words */
 
 
 /* supported EIP version */
-#define EIP_VERSION     ((uint16_t)1)
+const uint16_t EIP_VERSION     = ((uint16_t)1);
 
-static tcp_connection_status_t decode_eip_header(slice_p request, eip_header_p header, slice_p header_slice, slice_p payload_slice);
-static tcp_connection_status_t encode_eip_header(slice_p response, eip_header_p header);
-static tcp_connection_status_t reserve_eip_header(slice_p response, eip_header_p header);
-
-
+static slice_status_t decode_eip_pdu(slice_p request, eip_pdu_p pdu, slice_p request_header_slice, slice_p request_payload_slice);
+static slice_status_t encode_eip_pdu(slice_p pdu_header_slice, eip_pdu_p pdu);
+static slice_status_t reserve_eip_pdu(slice_p response, slice_p pdu_header_slice, slice_p eip_pdu_p);
 
 
-static tcp_connection_status_t register_session(slice_p request, slice_p parent_response, plc_connection_p connection_arg);
-static tcp_connection_status_t unregister_session(slice_p request, slice_p parent_response, plc_connection_p connection_arg);
+
+
+static tcp_connection_status_t register_session(slice_p request, slice_p response, plc_connection_p connectionß);
+static tcp_connection_status_t unregister_session(slice_p request, slice_p response, plc_connection_p connectionß);
+
+
+
+#define GET_FIELD(SLICE, TYPE, ADDR, SIZE)                                           \
+        if(slice_get_ ## TYPE ## _le_at_offset((SLICE), offset, (ADDR))) {    \
+            warn("Unable to get field at offset %"PRIu32"!", offset);         \
+            rc = SLICE_ERR_DECODE;                                            \
+            break;                                                            \
+        }                                                                     \
+        offset += (SIZE)
+
+
+#define SET_FIELD(SLICE, TYPE, VAL, SIZE)                                                  \
+        if(slice_set_ ## TYPE ## _le_at_offset((SLICE), offset, (VAL))) {  \
+            warn("Unable to set field at offset %"PRIu32"!", offset);               \
+            rc = SLICE_ERR_ENCODE;                                                  \
+            break;                                                                  \
+        }                                                                           \
+        offset += (SIZE)
+
 
 
 
@@ -70,9 +92,11 @@ tcp_connection_status_t eip_dispatch_request(slice_p request, slice_p response, 
     slice_status_t slice_rc = SLICE_STATUS_OK;
     plc_connection_p connection = (plc_connection_p)connection_arg;
     uint8_t *saved_start = NULL;
+    slice_t request_header_slice = {0};
+    slice_t request_payload_slice = {0};
     slice_t response_header_slice = {0};
     slice_t response_payload_slice = {0};
-    eip_header_t eip_header = {0};
+    eip_pdu_t pdu = {0};
 
     info("eip_dispatch_request(): got packet:");
     debug_dump_buf(DEBUG_INFO, request->start, request->end);
@@ -80,47 +104,54 @@ tcp_connection_status_t eip_dispatch_request(slice_p request, slice_p response, 
     do {
         uint32_t session_handle = 0;
 
-        assert_detail((slice_len(request) >= EIP_HEADER_SIZE), TCP_CONNECTION_PDU_INCOMPLETE, "Not enough data for the EIP header.  Go get more.");
+        assert_detail((slice_len(request) >= EIP_HEADER_SIZE), TCP_CONNECTION_PDU_ERR_INCOMPLETE, "Not enough data for the EIP request PDU.");
 
-        rc = decode_eip_header(request, &eip_header, &response_header_slice, &response_payload_slice);
+        slice_rc = decode_eip_pdu(request, &pdu, &request_header_slice &request_payload_slice);
 
-        if(rc != TCP_CONNECTION_OK) {
-            warn("Unable to decode the EIP header!");
+        if(slice_rc != SLICE_STATUS_OK) {
+            warn("Unable to decode the EIP pdu!");
+            rc = TCP_CONNECTION_PDU_ERR_DECODE;
             break;
         }
 
-        /* push the response end out to the full buffer. */
-        response_payload_slice.end = response->end;
-
         /* sanity checks */
-        assert_detail((slice_len(request) > (uint32_t)(header.length + (uint32_t)EIP_HEADER_SIZE)),
-                       TCP_CONNECTION_PDU_INCOMPLETE,"Partial EIP packet, returning for more data."
+        assert_info((slice_len(request) >= (uint32_t)(pdu.length + (uint32_t)EIP_HEADER_SIZE)),
+                       TCP_CONNECTION_PDU_ERR_INCOMPLETE,
+                       "Partial EIP packet, returning for more data."
                      );
 
         /* If we have a session handle already, we must match it with the incoming request */
-        assert_warn(((!connection->eip_connection.eip_header.session_handle) || (header.session_handle == connection->eip_connection.eip_header.session_handle)),
-                     TCP_CONNECTION_PDU_ERR_MALFORMED,
+        assert_warn(((!connection->session_handle) || (pdu.session_handle == connection->session_handle)),
+                     TCP_CONNECTION_PDU_ERR_BAD_PARAM,
                      "Request session handle %08"PRIx32" does not match the one for this connection, %08"PRIx32"!",
-                     session_handle,
-                     connection->eip_connection.eip_header.session_handle
+                     pdu.session_handle,
+                     connection->session_handle
                     );
 
+        /* set up the response slices */
+        slice_rc = reserve_eip_pdu(response, &response_header_slice, &response_payload_slice);
+        if(slice_rc != SLICE_STATUS_OK) {
+            warn("Unable to reserve response header and payload slices!");
+            rc = TCP_CONNECTION_PDU_ERR_SLICE;
+            break;
+        }
+
         /* dispatch the request */
-        switch(connection->eip_connection.eip_header.command) {
+        switch(pdu.command) {
             case EIP_REGISTER_SESSION:
-                rc = register_session(request, &response_payload_slice, connection);
+                rc = register_session(&request_payload_slice, &response_payload_slice, connection);
                 break;
 
             case EIP_UNREGISTER_SESSION:
-                rc = unregister_session(request, &response_payload_slice, connection);
+                rc = unregister_session(&request_payload_slice, &response_payload_slice, connection);
                 break;
 
             case EIP_CONNECTED_SEND:
-                rc = cpf_dispatch_connected_request(request, &response_payload_slice, connection);
+                rc = cpf_dispatch_connected_request(&request_payload_slice, &response_payload_slice, connection);
                 break;
 
             case EIP_UNCONNECTED_SEND:
-                rc = cpf_dispatch_unconnected_request(request, &response_payload_slice, connection);
+                rc = cpf_dispatch_unconnected_request(&request_payload_slice, &response_payload_slice, connection);
                 break;
 
             default:
@@ -134,35 +165,32 @@ tcp_connection_status_t eip_dispatch_request(slice_p request, slice_p response, 
         }
 
         if(rc == TCP_CONNECTION_PDU_STATUS_OK) {
-            uint32_t payload_length = slice_len(response);
+            uint32_t response_payload_length = EIP_HEADER_SIZE + slice_len(&response_payload_slice);
+            slice_t response_slice = {0};
 
-            /* set up the response. */
-            response->start = saved_start;
-
-            slice_rc = slice_pack(response, "u2,u2,u4,u4,u8,u4",
-                                            connection->eip_connection.command,
-                                            (uint16_t)(payload_length),
-                                            connection->eip_connection.session_handle,
-                                            connection->eip_connection.status,
-                                            connection->eip_connection.sender_context,
-                                            connection->eip_connection.options
-                                 );
-
-            if(slice_rc == SLICE_ERR_TOO_LITTLE_SPACE) {
-                warn("Insufficient space in the parent_response buffer!");
+            slice_rc = slice_split_at_offset(response, response_payload_length, &response_slice, NULL);
+            if(slice_rc != SLICE_STATUS_OK) {
+                warn("Unable to split response slice at offset %"PRIu32"!", response_payload_length);
+                rc = TCP_CONNECTION_PDU_ERR_SLICE;
                 break;
             }
 
-            assert_warn((slice_rc != SLICE_ERR_TOO_LITTLE_SPACE), TCP_CONNECTION_PDU_INCOMPLETE, "Insufficient space in the parent_response buffer!");
+            /* set the session handle */
+            pdu.session_handle = connection->session_handle;
 
-            assert_error((slice_rc == SLICE_STATUS_OK), "Fatal slice error, %d, processing data!", slice_rc);
+            slice_rc = encode_eip_pdu(&response_header_slice, &pdu);
+            if(slice_rc != SLICE_STATUS_OK) {
+                warn("Unable to encode response header slice!");
+                rc = TCP_CONNECTION_PDU_ERR_ENCODE;
+                break;
+            }
         }
     } while(0);
 
     if(rc == TCP_CONNECTION_PDU_STATUS_OK) {
         /* if there is a parent_response delay requested, then wait a bit. */
-        if(connection->eip_connection.response_delay > 0) {
-            util_sleep_ms(connection->eip_connection.response_delay);
+        if(connection->response_delay > 0) {
+            util_sleep_ms(connection->response_delay);
         }
     }
 
@@ -173,8 +201,8 @@ tcp_connection_status_t eip_dispatch_request(slice_p request, slice_p response, 
 
 tcp_connection_status_t register_session(slice_p request, slice_p response, plc_connection_p connection)
 {
-    tcp_connection_status_t rc = TCP_CONNECTION_PDU_STATUS_OK;
-    slice_status_t slice_rc = SLICE_STATUS_OK;
+    tcp_connection_status_t conn_rc = TCP_CONNECTION_OK;
+    slice_status_t rc = SLICE_STATUS_OK;
     uint8_t *saved_start = response->start;
 
     struct {
@@ -183,46 +211,54 @@ tcp_connection_status_t register_session(slice_p request, slice_p response, plc_
     } register_request;
 
     do {
-        slice_rc = slice_unpack(request, "u2,u2",
-                                          &register_request.eip_version,
-                                          &register_request.option_flags
-                               );
+        uint32_t offset = 0;
 
-        assert_error((slice_rc == SLICE_STATUS_OK), "Error with unpacking from the request slice!");
-
-        /* sanity checks.  The command and packet length are checked by now. */
+        GET_FIELD(request, u16, &(register_request.eip_version), sizeof(register_request.eip_version));
+        GET_FIELD(request, u16, &(register_request.option_flags), sizeof(register_request.option_flags));
 
         /* session_handle must be zero. */
-        assert_warn((connection->eip_connection.session_handle == (uint32_t)0), TCP_CONNECTION_PDU_ERR_MALFORMED, "Request failed sanity check: request session handle is %04"PRIx32" but should be zero.", connection->eip_connection.session_handle);
-
-        /* status must be zero. */
-        assert_warn((connection->eip_connection.status == (uint32_t)0), TCP_CONNECTION_PDU_ERR_MALFORMED, "Request failed sanity check: request status is %04"PRIx32" but should be zero.", connection->eip_connection.status);
-
-        /* sender context must be zero? */
-        assert_warn((connection->eip_connection.sender_context == (uint64_t)0), TCP_CONNECTION_PDU_ERR_MALFORMED, "Request failed sanity check: request sender context is %08"PRIx64" but should be zero.", connection->eip_connection.sender_context);
+        assert_warn((connection->session_handle == (uint32_t)0), TCP_CONNECTION_PDU_ERR_BAD_PARAM, "Request failed sanity check: request session handle is %04"PRIx32" but should be zero.", connection->session_handle);
 
         /* request EIP version must be 1 (one). */
-        assert_warn((register_request.eip_version == (uint32_t)1), TCP_CONNECTION_PDU_ERR_MALFORMED, "Request failed sanity check: request EIP version is %04"PRIx32" but should be one (1).", register_request.eip_version);
+        assert_warn((register_request.eip_version == (uint32_t)1), TCP_CONNECTION_PDU_ERR_BAD_PARAM, "Request failed sanity check: request EIP version is %04"PRIx32" but should be one (1).", register_request.eip_version);
 
         /* request option flags must be zero. */
         assert_warn((register_request.option_flags == (uint32_t)0), TCP_CONNECTION_PDU_ERR_MALFORMED, "Request failed sanity check: request option flags is %04"PRIx32" but should be zero.", register_request.option_flags);
 
         /* all good, generate a session handle. */
-        connection->eip_connection.session_handle = (uint32_t)rand();
+        connection->session_handle = (uint32_t)rand();
 
-        slice_rc = slice_pack(response, "u2,u2",
-                                         &register_request.eip_version,
-                                         &register_request.option_flags
-                             );
-
-        assert_error((slice_rc == SLICE_STATUS_OK), "Error with packing into the parent_response slice!");
+        SET_FIELD(response, u16, register_request.eip_version, sizeof(register_request.eip_version));
+        SET_FIELD(response, u16, register_request.option_flags, sizeof(register_request.option_flags));
 
         /* cap off the response. */
         response->end = response->start;
         response->start = saved_start;
     } while(0);
 
-    return rc;
+    switch(rc) {
+        case SLICE_STATUS_OK:
+            conn_rc = TCP_CONNECTION_OK;
+            break;
+
+        case SLICE_ERR_DECODE:
+            conn_rc = TCP_CONNECTION_PDU_ERR_DECODE;
+            break;
+
+        case SLICE_ERR_ENCODE:
+            conn_rc = TCP_CONNECTION_PDU_ERR_ENCODE;
+            break;
+
+        case SLICE_ERR_INSUFFICIENT_DATA:
+            conn_rc = TCP_CONNECTION_PDU_ERR_INCOMPLETE;
+            break;
+
+        default:
+            conn_rc = TCP_CONNECTION_PDU_ERR_SLICE;
+            break;
+    }
+
+    return conn_rc;
 }
 
 
@@ -237,82 +273,83 @@ tcp_connection_status_t unregister_session(slice_p request, slice_p parent_respo
 }
 
 
-tcp_connection_status_t decode_eip_header(slice_p request, eip_header_p header, slice_p header_slice, slice_p payload_slice)
+
+slice_status_t decode_eip_pdu(slice_p request, eip_pdu_p pdu, slice_p request_header_slice, slice_p request_payload_slice)
 {
-    tcp_connection_status_t rc = TCP_CONNECTION_PDU_STATUS_OK;
-    slice_status_t slice_rc = SLICE_STATUS_OK;
-    slice_t payload = {0};
+    slice_status_t rc = SLICE_STATUS_OK;
 
     do {
-        assert_warn((header), PDU_ERR_INTERNAL, "Header pointer is null!");
+        uint32_t offset = 0;
 
-        assert_detail((slice_len(request) >= EIP_HEADER_SIZE), TCP_CONNECTION_PDU_INCOMPLETE, "Not enough data for the EIP header.");
+        assert_warn((pdu), PDU_ERR_INTERNAL, "Header pointer is null!");
 
-        memset(header, 0, sizeof(*header));
+        assert_detail((slice_len(request) >= EIP_HEADER_SIZE), SLICE_ERR_INSUFFICIENT_DATA, "Not enough data for the EIP pdu.");
 
-        /* unpack EIP header. */
-        slice_rc = slice_unpack(request, "u2,u2,u4,u4,u8,u4,|",
-                                &header->command,
-                                &header->length,
-                                &header->session_handle,
-                                &header->status,
-                                &header->sender_context,
-                                &header->options,
-                                header_slice,
-                                payload_slice
-                            );
+        memset(pdu, 0, sizeof(*pdu));
 
-        assert_info((slice_rc != SLICE_ERR_TOO_LITTLE_DATA), PDU_ERR_INCOMPLETE, "Not enough data to unpack EIP header.");
+        GET_FIELD(request, u16, &(pdu->command), sizeof(pdu->command));
+        GET_FIELD(request, u16, &(pdu->length), sizeof(pdu->length));
+        GET_FIELD(request, u32, &(pdu->session_handle), sizeof(pdu->session_handle));
+        GET_FIELD(request, u32, &(pdu->status), sizeof(pdu->status));
+        GET_FIELD(request, u64, &(pdu->sender_context), sizeof(pdu->sender_context));
+        GET_FIELD(request, u32, &(pdu->options), sizeof(pdu->options));
 
-        assert_warn((slice_rc == SLICE_STATUS_OK), PDU_ERR_INTERNAL, "Unable to unpack EIP header!");
+        rc = slice_split_at_offset(request, offset, request_header_slice, request_payload_slice);
+        if(rc != SLICE_STATUS_OK) {
+            warn("Unable to split request slice into header and payload parts!");
+            break;
+        }
     } while(0);
 
     return rc;
 }
 
 
-pdu_status_t encode_eip_header(slice_p response, eip_header_p header)
+
+
+slice_status_t encode_eip_pdu(slice_p pdu_header_slice, eip_pdu_p pdu)
 {
-    tcp_connection_status_t rc = PDU_STATUS_OK;
-    slice_status_t slice_rc = SLICE_STATUS_OK;
-    uint8_t *saved_start = NULL;
+    slice_status_t rc = SLICE_STATUS_OK;
 
     do {
-        assert_warn((header), PDU_ERR_INTERNAL, "Header pointer is null!");
+        uint32_t offset = 0;
 
-        assert_detail((slice_len(response) >= EIP_HEADER_SIZE), PDU_ERR_NO_SPACE, "Not enough data for the EIP header.");
+        assert_warn((pdu), PDU_ERR_INTERNAL, "Header pointer is null!");
 
-        saved_start = response->start;
+        assert_detail((slice_len(pdu_header_slice) >= EIP_HEADER_SIZE), PDU_ERR_NO_SPACE, "Not enough data for the EIP pdu.");
 
-        /* unpack EIP header. */
-        slice_rc = slice_pack(response, "u2,u2,u4,u4,u8,u4",
-                                header->command,
-                                (uint16_t)(slice_len(&(header->payload))),
-                                header->session_handle,
-                                header->status,
-                                header->sender_context,
-                                header->options
-                            );
-
-        assert_info((slice_rc != SLICE_ERR_TOO_LITTLE_DATA), PDU_ERR_INCOMPLETE, "Not enough data to unpack EIP header.");
-
-        assert_warn((slice_rc == SLICE_STATUS_OK), PDU_ERR_INTERNAL, "Unable to unpack EIP header!");
-
-        response->start = saved_start;
+        /* encode EIP pdu. */
+        SET_FIELD(pdu_header_slice, u16, pdu->command, sizeof(pdu->command));
+        SET_FIELD(pdu_header_slice, u16, (uint16_t)slice_len(&(pdu->payload)), sizeof(pdu->length));
+        SET_FIELD(pdu_header_slice, u32, pdu->session_handle, sizeof(pdu->session_handle));
+        SET_FIELD(pdu_header_slice, u32, pdu->status, sizeof(pdu->status));
+        SET_FIELD(pdu_header_slice, u64, pdu->sender_context, sizeof(pdu->sender_context));
+        SET_FIELD(pdu_header_slice, u32, pdu->options, sizeof(pdu->options));
     } while(0);
 
     return rc;
 }
 
 
-pdu_status_t reserve_eip_header(slice_p response)
+slice_status_t reserve_eip_pdu(slice_p response, slice_p pdu_header_slice, slice_p pdu_payload_slice)
 {
-    pdu_status_t rc = PDU_STATUS_OK;
+    slice_status_t rc = PDU_STATUS_OK;
 
     do {
-        assert_warn((slice_len(response) >= EIP_HEADER_SIZE), PDU_ERR_NO_SPACE, "Insuffienct space in response buffer for EIP header!");
+        uint32_t header_size = 0;
+        eip_pdu_t pdu;
 
-        response->start += EIP_HEADER_SIZE;
+        assert_warn((slice_len(response) >= EIP_HEADER_SIZE), PDU_ERR_NO_SPACE, "Insuffienct space in response buffer for EIP pdu!");
+
+        header_size = 0;
+        header_size += sizeof(pdu.command);
+        header_size += sizeof(pdu.length);
+        header_size += sizeof(pdu.session_handle);
+        header_size += sizeof(pdu.status);
+        header_size += sizeof(pdu.sender_context);
+        header_size += sizeof(pdu.options);
+
+        rc = slice_split_at_offset(response, header_size, pdu_header_slice, pdu_payload_slice);
     } while(0);
 
     return rc;
