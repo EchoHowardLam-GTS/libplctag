@@ -61,5 +61,4 @@ typedef struct tcp_connection_t {
 typedef tcp_connection_t *tcp_connection_p;
 
 
-
 extern void tcp_server_run(const char *host, const char *port, volatile sig_atomic_t *terminate, tcp_connection_allocate_func allocator, void *app_data);

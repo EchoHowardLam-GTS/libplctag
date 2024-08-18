@@ -50,6 +50,8 @@ typedef enum {
     STATUS_ERR_TIMEOUT,
     STATUS_ERR_ABORTED,
     STATUS_ERR_BUSY,
+    STATUS_ERR_PARTIAL,
+    STATUS_ERR_OUT_OF_BOUNDS,
 } status_t;
 
 static inline bool status_is_error(status_t status)

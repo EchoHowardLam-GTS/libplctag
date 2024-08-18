@@ -33,6 +33,7 @@
 
 #pragma once
 
+#include <stdbool.h>
 #include <stdint.h>
 
 #include "slice.h"
@@ -43,7 +44,7 @@
 #endif
 
 
-extern status_t socket_open(const char *host, const char *port, SOCKET *sock_fd);
+extern status_t socket_open(const char *host, const char *port, bool is_server, SOCKET *sock_fd);
 extern void socket_close(SOCKET sock);
 extern status_t socket_accept(SOCKET sock, SOCKET *client_fd, uint32_t timeout_ms);
 extern status_t socket_read(SOCKET sock, slice_p in_buf, uint32_t timeout_ms);

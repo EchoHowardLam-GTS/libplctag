@@ -88,7 +88,7 @@ status_t slice_to_string(slice_p slice, char *result, uint32_t result_size, bool
 
         if(str_length_required > result_size) {
             warn("Slice contains more data than can fit in the string buffer!");
-            rc = SLICE_ERR_TOO_MUCH_DATA;
+            rc = STATUS_ERR_OUT_OF_BOUNDS;
             break;
         }
 
@@ -146,7 +146,7 @@ status_t string_to_slice(const char *source, slice_p dest, bool byte_swap)
 
         if(slice_length_required > slice_get_len(dest)) {
             warn("Insufficient space in the destination slice!");
-            rc = SLICE_ERR_TOO_LITTLE_SPACE;
+            rc = STATUS_ERR_RESOURCE;
             break;
         }
 
@@ -210,17 +210,17 @@ status_t slice_from_slice(slice_p parent, slice_p new_slice, uint8_t *start, uin
 
     if(parent_start > new_slice_start || new_slice_start > parent_end) {
         warn("Start must be inside the parent slice bounds!");
-        return SLICE_ERR_OUT_OF_BOUNDS;
+        return STATUS_ERR_OUT_OF_BOUNDS;
     }
 
     if(parent_start > new_slice_end || new_slice_end > parent_end) {
         warn("End must be inside the parent slice bounds!");
-        return SLICE_ERR_OUT_OF_BOUNDS;
+        return STATUS_ERR_OUT_OF_BOUNDS;
     }
 
     if(new_slice_start > new_slice_end) {
         warn("Start must be a lower address than end!");
-        return SLICE_ERR_OUT_OF_BOUNDS;
+        return STATUS_ERR_OUT_OF_BOUNDS;
     }
 
     new_slice->start = start;
@@ -236,7 +236,7 @@ bool slice_get_u16_le_at_ptr(slice_p slice, uint8_t *ptr, uint16_t *val)
         *val = 0;
 
         *val |= (uint16_t)*(ptr);
-        *val |= (uint16_t)(*(ptr + 1) << 8);
+        *val |= ((uint16_t)(*(ptr + 1)) << 8);
 
         return true;
     }
@@ -263,9 +263,9 @@ bool slice_get_u32_le_at_ptr(slice_p slice, uint8_t *ptr, uint32_t *val)
         *val = 0;
 
         *val |= (uint32_t)*(ptr);
-        *val |= (uint32_t)(*(ptr + 1) << 8);
-        *val |= (uint32_t)(*(ptr + 2) << 16);
-        *val |= (uint32_t)(*(ptr + 3) << 24);
+        *val |= ((uint32_t)(*(ptr + 1)) << 8);
+        *val |= ((uint32_t)(*(ptr + 2)) << 16);
+        *val |= ((uint32_t)(*(ptr + 3)) << 24);
 
         return true;
     }
@@ -294,13 +294,13 @@ bool slice_get_u64_le_at_ptr(slice_p slice, uint8_t *ptr, uint64_t *val)
         *val = 0;
 
         *val |= (uint64_t)*(ptr);
-        *val |= (uint64_t)(*(ptr + 1) << 8);
-        *val |= (uint64_t)(*(ptr + 2) << 16);
-        *val |= (uint64_t)(*(ptr + 3) << 24);
-        *val |= (uint64_t)(*(ptr + 4) << 32);
-        *val |= (uint64_t)(*(ptr + 5) << 40);
-        *val |= (uint64_t)(*(ptr + 6) << 48);
-        *val |= (uint64_t)(*(ptr + 7) << 56);
+        *val |= ((uint64_t)(*(ptr + 1)) << 8);
+        *val |= ((uint64_t)(*(ptr + 2)) << 16);
+        *val |= ((uint64_t)(*(ptr + 3)) << 24);
+        *val |= ((uint64_t)(*(ptr + 4)) << 32);
+        *val |= ((uint64_t)(*(ptr + 5)) << 40);
+        *val |= ((uint64_t)(*(ptr + 6)) << 48);
+        *val |= ((uint64_t)(*(ptr + 7)) << 56);
 
         return true;
     }

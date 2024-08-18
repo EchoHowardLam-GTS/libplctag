@@ -106,10 +106,9 @@ static int match_path(slice_p request, bool need_pad, uint8_t *path, uint8_t pat
 
 
 
-status_t cip_dispatch_request(slice_p request, slice_p response, tcp_connection_p connection_arg)
+status_t cip_dispatch_request(slice_p request, slice_p response, plc_connection_p connection)
 {
-    status_t slice_rc = STATUS_OK;
-    plc_connection_p connection = (plc_connection_p)connection_arg;
+    status_t rc = STATUS_OK;
     uint8_t cip_service = 0;
     uint8_t *saved_request_start = NULL;
     uint8_t *saved_response_start = NULL;
@@ -121,9 +120,9 @@ status_t cip_dispatch_request(slice_p request, slice_p response, tcp_connection_
         /* save the start of the request for later */
         saved_request_start = request->start;
 
-        slice_rc = slice_unpack(request, "&u1", &cip_service);
+        rc = slice_unpack(request, "&u1", &cip_service);
 
-        assert_info((slice_rc != SLICE_ERR_TOO_LITTLE_DATA), PDU_ERR_INCOMPLETE, "Insufficient data to unpack PDU.");
+        assert_info((slice_rc != SLICE_ERR_TOO_LITTLE_DATA), STATUS_ERR_PARTIAL, "Insufficient data to unpack PDU.");
 
         assert_warn((slice_rc == STATUS_OK), PDU_ERR_INTERNAL, "Unable to unpack request slice!");
 
@@ -134,13 +133,13 @@ status_t cip_dispatch_request(slice_p request, slice_p response, tcp_connection_
         saved_response_start = response->start;
 
         switch(cip_service) {
-            case CIP_SERVICE_MULTI_REQUEST: conn_rc = PDU_ERR_NOT_SUPPORTED; break;
+            case CIP_SERVICE_MULTI_REQUEST: rc = STATUS_ERR_NOT_SUPPORTED; break;
 
-            case CIP_SERVICE_PCCC_EXECUTE: conn_rc = PDU_ERR_NOT_SUPPORTED; break;
+            case CIP_SERVICE_PCCC_EXECUTE: rc = STATUS_ERR_NOT_SUPPORTED; break;
 
-            case CIP_SERVICE_READ_TAG: conn_rc = process_tag_read_request(request, response, connection_arg); break;
+            case CIP_SERVICE_READ_TAG: rc = process_tag_read_request(request, response, connection_arg); break;
 
-            case CIP_SERVICE_WRITE_TAG: conn_rc = PDU_ERR_NOT_SUPPORTED; break;
+            case CIP_SERVICE_WRITE_TAG: rc = STATUS_ERR_NOT_SUPPORTED; break;
 
             case CIP_SERVICE_FORWARD_CLOSE:     /* DUPE !*/
 
@@ -149,24 +148,24 @@ status_t cip_dispatch_request(slice_p request, slice_p response, tcp_connection_
 
             case CIP_SERVICE_READ_TAG_FRAG:
 
-            case CIP_SERVICE_WRITE_TAG_FRAG: conn_rc = PDU_ERR_NOT_SUPPORTED; break;
+            case CIP_SERVICE_WRITE_TAG_FRAG: rc = STATUS_ERR_NOT_SUPPORTED; break;
 
             case CIP_SERVICE_FORWARD_OPEN:
 
             case CIP_SERVICE_FORWARD_OPEN_EX:
 
-            case CIP_SERVICE_LIST_TAG_ATTRIBS: conn_rc = PDU_ERR_NOT_SUPPORTED; break;
+            case CIP_SERVICE_LIST_TAG_ATTRIBS: rc = STATUS_ERR_NOT_SUPPORTED; break;
 
-            default: conn_rc = PDU_ERR_NOT_RECOGNIZED; break;
+            default: rc = PDU_ERR_NOT_RECOGNIZED; break;
         }
 
         /* reset the response start to the position it was in when we were called. */
-        if(conn_rc == PDU_STATUS_OK) {
+        if(rc == PDU_STATUS_OK) {
             response->start = saved_response_start;
         }
     } while(0);
 
-    return conn_rc;
+    return rc;
 }
 
 
@@ -197,7 +196,7 @@ typedef struct {
 
 status_t process_forward_open(slice_p request, slice_p response, plc_connection_p connection)
 {
-    status_t conn_rc = STATUS_OK;
+    status_t rc = STATUS_OK;
     status_t slice_rc = STATUS_OK;
     uint8_t cip_service = 0;
     uint8_t *saved_request_start = NULL;
@@ -289,7 +288,7 @@ status_t process_forward_open(slice_p request, slice_p response, plc_connection_
                            (uint16_t)CIP_ERR_EX_DUPLICATE_CONN
                           );
 
-            conn_rc = STATUS_OK;
+            rc = STATUS_OK;
 
             break;
         }
@@ -494,7 +493,7 @@ int process_tag_read_request(tcp_connection_p connection)
         read_cmd = buf_get_uint8(request);
 
         /* Omron does not support fragmented read. */
-        if(client->plc->plc_type == PLC_OMRON && read_cmd == CIP_READ_FRAG[0]) {
+        if(client->plc->plc_type == PLC_TYPE_OMRON && read_cmd == CIP_READ_FRAG[0]) {
             info("Omron PLCs do not support fragmented read!");
             make_cip_error(response, read_cmd | CIP_DONE, CIP_ERR_UNSUPPORTED, false, 0);
             rc = CIP_ERR_UNSUPPORTED;
@@ -530,7 +529,7 @@ int process_tag_read_request(tcp_connection_p connection)
         element_count = buf_get_uint16_le(request);
 
         /* FIXME - this is not required. */
-        if(client->plc->plc_type == PLC_OMRON) {
+        if(client->plc->plc_type == PLC_TYPE_OMRON) {
             if(element_count != 1) {
                 info("Omron PLC requires element count to be 1, found %d!", element_count);
                 make_cip_error(response, read_cmd | CIP_DONE, CIP_ERR_INVALID_PARAMETER, false, 0);

@@ -33,11 +33,10 @@
 
 #pragma once
 
+#include "plc.h"
 #include "utils/tcp_server.h"
 #include "utils/slice.h"
 #include "utils/status.h"
-
-#include "plc.h"
 
 extern status_t cpf_dispatch_connected_request(slice_p request, slice_p response, plc_connection_p connection);
 extern status_t cpf_dispatch_unconnected_request(slice_p request, slice_p response, plc_connection_p connections);

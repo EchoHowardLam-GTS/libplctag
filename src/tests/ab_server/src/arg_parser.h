@@ -36,5 +36,6 @@
 #include <stdbool.h>
 #include "cip.h"
 #include "plc.h"
+#include "utils/status.h"
 
-extern bool process_args(int argc, const char **argv, plc_connection_p template_connection);
+extern status_t process_args(int argc, const char **argv, plc_connection_p template_connection);

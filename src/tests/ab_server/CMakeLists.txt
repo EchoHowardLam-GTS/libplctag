@@ -37,7 +37,24 @@ if("${CMAKE_TOOLCHAIN_FILE}" STREQUAL "")
     include("${TOOLCHAIN_FILE}")
 endif()
 
-add_executable(ab_server "src/arg_parser.h"
+add_executable(ab_server
+                        "src/utils/compat.h"
+                        "src/utils/debug.c"
+                        "src/utils/debug.h"
+                        "src/utils/mutex_compat.h"
+                        "src/utils/slice.c"
+                        "src/utils/slice.h"
+                        "src/utils/socket.c"
+                        "src/utils/socket.h"
+                        "src/utils/status.c"
+                        "src/utils/status.h"
+                        "src/utils/tcp_server.c"
+                        "src/utils/tcp_server.h"
+                        "src/utils/thread_compat.h"
+                        "src/utils/time_utils.c"
+                        "src/utils/time_utils.h"
+
+                         "src/arg_parser.h"
                          "src/arg_parser.c"
                          "src/cip.c"
                          "src/cip.h"
@@ -49,21 +66,6 @@ add_executable(ab_server "src/arg_parser.h"
                          "src/pccc.c"
                          "src/pccc.h"
                          "src/plc.h"
-                         "src/utils/compat.h"
-                         "src/utils/debug.c"
-                         "src/utils/debug.h"
-                         "src/utils/mutex_compat.h"
-                         "src/utils/slice.c"
-                         "src/utils/slice.h"
-                         "src/utils/socket.c"
-                         "src/utils/socket.h"
-                         "src/utils/status.c"
-                         "src/utils/status.h"
-                         "src/utils/tcp_server.c"
-                         "src/utils/tcp_server.h"
-                         "src/utils/thread_compat.h"
-                         "src/utils/time_utils.c"
-                         "src/utils/time_utils.h"
 )
 
 message("compiler flags = \"${COMPILER_FLAGS}\"")

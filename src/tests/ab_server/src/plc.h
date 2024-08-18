@@ -35,11 +35,12 @@
 
 #include <stddef.h>
 #include <stdint.h>
-#include "cip.h"
-#include "cpf.h"
-#include "eip.h"
-#include "pccc.h"
+
 #include "utils/mutex_compat.h"
+// #include "eip.h"
+// #include "cpf.h"
+// #include "cip.h"
+// #include "pccc.h"
 
 
 typedef uint16_t cip_tag_type_t;
@@ -59,6 +60,9 @@ const cip_tag_type_t TAG_CIP_TYPE_LREAL       = ((cip_tag_type_t)0x00CB); /* 64â
 
 // FIXME - this is wrong below!
 const cip_tag_type_t TAG_CIP_TYPE_STRING      = ((cip_tag_type_t)0x00D0); /* 88-byte string, with 82 bytes of data, 4-byte count and 2 bytes of padding */
+
+/* this is needed for Rockwell-style BOOL arrays. */
+const cip_tag_type_t TAG_CIP_TYPE_32BIT_BIT_STRING = ((cip_tag_type_t)0x00D3); /* used for Rockwell bit strings */
 
 /* PCCC data types.   FIXME */
 typedef uint8_t pccc_tag_type_t;
@@ -86,12 +90,13 @@ typedef struct tag_def_t tag_def_t;
 typedef struct tag_def_t *tag_def_p;
 
 typedef enum plc_type_t {
-    PLC_CONTROL_LOGIX,
-    PLC_MICRO800,
-    PLC_OMRON,
-    PLC_PLC5,
-    PLC_SLC,
-    PLC_MICROLOGIX
+    PLC_TYPE_NONE,
+    PLC_TYPE_CONTROL_LOGIX,
+    PLC_TYPE_MICRO800,
+    PLC_TYPE_OMRON,
+    PLC_TYPE_PLC5,
+    PLC_TYPE_SLC,
+    PLC_TYPE_MICROLOGIX
 } plc_type_t;
 
 
@@ -116,6 +121,7 @@ typedef struct {
     uint32_t server_to_client_max_packet;
 
     /* CIP device path */
+    bool needs_path;
     uint8_t path[MAX_CIP_DEVICE_PATH_WORDS*2];
     uint8_t path_len;
 
@@ -136,7 +142,6 @@ typedef struct {
 } plc_connection_t;
 
 typedef plc_connection_t *plc_connection_p;
-
 
 
 #define GET_FIELD(SLICE, TYPE, ADDR, SIZE)                                    \

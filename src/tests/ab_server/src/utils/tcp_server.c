@@ -56,7 +56,7 @@ void tcp_server_run(const char *host, const char *port, volatile sig_atomic_t *t
     tcp_connection_p tcp_client = NULL;
     thread_t client_thread;
 
-    sock_rc = socket_open(host, port, &listen_fd);
+    sock_rc = socket_open(host, port, true, &listen_fd);
 
     assert_error((sock_rc == STATUS_OK), "Unable to open listener TCP socket, error code!");
 

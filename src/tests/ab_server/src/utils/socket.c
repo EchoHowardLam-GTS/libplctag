@@ -76,8 +76,7 @@
 
 
 
-
-int socket_open(const char *host, const char *port, bool is_server, SOCKET *sock_arg)
+status_t socket_open(const char *host, const char *port, bool is_server, SOCKET *sock_arg)
 {
     status_t rc = STATUS_OK;
 	struct addrinfo addr_hints;
@@ -380,7 +379,7 @@ status_t socket_read(int sock, slice_p buf, uint32_t timeout_ms)
         */
 
         /* The socket is non-blocking. */
-        read_status = (int)read(sock,buf->start,(size_t)slice_get_len(buf));
+        read_status = (int)read(sock, buf->start, (size_t)slice_get_len(buf));
         if(read_status < 0) {
             if(errno == EAGAIN || errno == EWOULDBLOCK) {
                 if(timeout_ms > 0) {
@@ -479,72 +478,113 @@ status_t socket_read(int sock, slice_p buf, uint32_t timeout_ms)
 #else
 
 /* this blocks until all the data is written or there is an error. */
-status_t socket_write(int sock, slice_p buf, uint32_t timeout_ms)
+status_t socket_write(int sock, slice_p data, uint32_t timeout_ms)
 {
     status_t rc = STATUS_OK;
-
-    do {
-
-    } while(0);
-
-    uint16_t bytes_written = 0;
-    uint16_t data_len = 0;
-    uint8_t *data_start = NULL;
-    uint16_t bytes_to_write = 0;
-
-    if(!buf) {
-        info("WARN: Null buffer pointer!");
-        rc = STATUS_ERR_OP_FAILED;
-    }
-
-    /* write until we exhaust the data. The buf length marks the end of the data. */
+    int write_status = 0;
 
     info("socket_write(): writing data:");
-    buf_dump(buf);
-
-    data_start = buf_data_ptr(buf, 0);
-
-    if(!data_start) {
-        info("WARN: Null data pointer!");
-        rc = STATUS_ERR_OP_FAILED;
-    }
-
-    bytes_to_write = buf_len(buf);
+    debug_dump_buf(DEBUG_INFO, data->start, data->end);
 
     do {
-#ifdef IS_WINDOWS
-        rc = (int)send(sock, (char *)data_start, (int)bytes_to_write, 0);
-#else
-        rc = (int)send(sock, (char *)data_start, (size_t)bytes_to_write, 0);
-#endif
+        /*
+        * Try to write immediately.   If we write data, we skip any other
+        * delays.   If we do not, then see if we have a timeout.
+        */
 
-        /* was there an error? */
-        if(rc < 0) {
-            /*
-             * check the return value.  If it is an interrupted system call
-             * or would block, just keep looping.
-             */
-#ifdef IS_WINDOWS
-            rc = WSAGetLastError();
-            if(rc != WSAEWOULDBLOCK) {
-#else
-            rc = errno;
-            if(rc != EAGAIN && rc != EWOULDBLOCK) {
-#endif
-                info("Socket write error rc=%d.\n", rc);
-                rc = STATUS_ERR_OP_FAILED;
+        /* The socket is non-blocking. */
+        write_status = (int)write(sock, data->start, (size_t)slice_get_len(data));
+        if(write_status < 0) {
+            if(errno == EAGAIN || errno == EWOULDBLOCK) {
+                if(timeout_ms > 0) {
+                    detail("Immediate write attempt did not succeed, now wait for select().");
+                } else {
+                    detail("Write wrote no data.");
+                }
+
+                write_status = 0;
             } else {
-                /* no error, just try again */
-                rc = 0;
+                warn("Socket write error: rc=%d, errno=%d", rc, errno);
+                rc = STATUS_ERR_OP_FAILED;
+                break;
             }
-        } else {
-            bytes_written += (size_t)rc;
-            data_start += rc;
-            bytes_to_write = data_len - bytes_written;
         }
-    } while(bytes_written < data_len);
 
-    return (int)(unsigned int)bytes_written;
+        /* only wait if we have a timeout and no error and no data. */
+        if(write_status == 0 && timeout_ms > 0) {
+            fd_set write_set;
+            struct timeval tv;
+            int select_rc = 0;
+
+            tv.tv_sec = (time_t)(timeout_ms / 1000);
+            tv.tv_usec = (suseconds_t)(timeout_ms % 1000) * (suseconds_t)(1000);
+
+            FD_ZERO(&write_set);
+
+            FD_SET(sock, &write_set);
+
+            select_rc = select(sock+1, NULL, &write_set, NULL, &tv);
+            if(select_rc == 1) {
+                if(FD_ISSET(sock, &write_set)) {
+                    detail("Socket can write data.");
+                } else {
+                    warn( "select() returned but socket is not ready to write data!");
+                    rc = STATUS_ERR_OP_FAILED;
+                    break;
+                }
+            } else if(select_rc == 0) {
+                detail("Socket write timed out.");
+                rc = STATUS_ERR_TIMEOUT;
+                break;
+            } else {
+                warn( "select() returned status %d!", select_rc);
+
+                switch(errno) {
+                    case EBADF: /* bad file descriptor */
+                        warn( "Bad file descriptor used in select()!");
+                        rc = STATUS_ERR_RESOURCE;
+                        break;
+
+                    case EINTR: /* signal was caught, this should not happen! */
+                        warn( "A signal was caught in select() and this should not happen!");
+                        rc = STATUS_ERR_OP_FAILED;
+                        break;
+
+                    case EINVAL: /* number of FDs was negative or exceeded the max allowed. */
+                        warn( "The number of fds passed to select() was negative or exceeded the allowed limit or the timeout is invalid!");
+                        rc = STATUS_ERR_PARAM;
+                        break;
+
+                    case ENOMEM: /* No mem for internal tables. */
+                        warn( "Insufficient memory for select() to run!");
+                        rc = STATUS_ERR_RESOURCE;
+                        break;
+
+                    default:
+                        warn( "Unexpected socket err %d!", errno);
+                        rc = STATUS_ERR_OP_FAILED;
+                        break;
+                }
+            }
+
+            /* try to write again. */
+            write_status = (int)write(sock, data->start, (size_t)slice_get_len(data));
+            if(write_status < 0) {
+                if(errno == EAGAIN || errno == EWOULDBLOCK) {
+                    detail("No data written.");
+                    write_status = 0;
+                } else {
+                    warn("Socket write error: write_status=%d, errno=%d", write_status, errno);
+                    rc = STATUS_ERR_OP_FAILED;
+                    break;
+                }
+            }
+        }
+    } while(0);
+
+    detail("Done: wrote %d bytes with result status %s.", write_status, status_to_str(rc));
+
+    return rc;
 }
 
 #endif

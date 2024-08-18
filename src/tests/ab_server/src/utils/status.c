@@ -52,6 +52,8 @@ const char *status_to_str(status_t status)
         case STATUS_ERR_TIMEOUT: return "STATUS_ERR_TIMEOUT. A timeout was reached waiting for an operation to complete."; break;
         case STATUS_ERR_ABORTED: return "STATUS_ERR_ABORTED.  The operation was aborted externally."; break;
         case STATUS_ERR_BUSY: return "STATUS_ERR_BUSY. An operation is already underway."; break;
+        case STATUS_ERR_PARTIAL: return "STATUS_ERR_PARTIAL. Incomplete data was found."; break;
+        case STATUS_ERR_OUT_OF_BOUNDS: return "STATUS_ERR_OUT_OF_BOUNDS. Attempt to access data out of bounds."; break;
 
         default: return "Unknown status code!"; break;
     }

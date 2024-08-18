@@ -36,9 +36,10 @@
 #include <time.h>
 #include <stdarg.h>
 #include <string.h>
-#include <errno.h>
 
-#if defined(WIN32) || defined(WIN64) || defined(_WIN32) || defined(_WIN64)
+#include "compat.h"
+
+#ifdef IS_WINDOWS
     #define _WINSOCKAPI_
     #include <windows.h>
     #include <tchar.h>
@@ -50,14 +51,15 @@
     /* assume it is POSIX of some sort... */
     #include <sys/time.h>
     #include <sys/types.h>
-    #include <sys/utils/socket.h>
+    #include <sys/socket.h>
     #include <netinet/in.h>
     #include <arpa/inet.h>
     #include <unistd.h>
     #include <netdb.h>
+    #include <errno.h>
 #endif
 
-#include "utils/time_utils.h"
+#include "time_utils.h"
 
 
 /*
@@ -125,115 +127,3 @@ int64_t util_time_ms(void)
 }
 
 #endif
-
-
-/*
- * string helpers
- */
-
-int match_chars(const char* source, int start_index, const char* chars)
-{
-    return (int)(unsigned int)strspn(source + start_index, chars);
-}
-
-
-/*
- * Logging routines.
- */
-
-static bool debug_is_on = false;
-
-
-void debug_on(void)
-{
-    debug_is_on = true;
-}
-
-void debug_off(void)
-{
-    debug_is_on = false;
-}
-
-
-
-void error_impl(const char *func, int line, const char *templ, ...)
-{
-    va_list va;
-
-    /* print it out. */
-    fprintf(stderr, "ERROR %s:%d ", func, line);
-    va_start(va,templ);
-    vfprintf(stderr,templ,va);
-    va_end(va);
-    fprintf(stderr,"\n");
-
-    exit(1);
-}
-
-
-
-void info_impl(const char *func, int line, const char *templ, ...)
-{
-    va_list va;
-
-    if(!debug_is_on) {
-        return;
-    }
-
-    /* print it out. */
-    fprintf(stderr, "INFO %s:%d ", func, line);
-    va_start(va,templ);
-    vfprintf(stderr,templ,va);
-    va_end(va);
-    fprintf(stderr,"\n");
-}
-
-
-#define COLUMNS (size_t)(16)
-
-void buf_dump(slice_p buf)
-{
-    size_t max_row, row, column;
-    char row_buf[300]; /* MAGIC */
-    uint16_t old_cursor = 0;
-    uint16_t data_len = 0;
-
-    if(!debug_is_on) {
-        return;
-    }
-
-    data_len = buf_len(buf);
-
-    /* determine the number of rows we will need to print. */
-    max_row = (data_len + (COLUMNS - 1))/COLUMNS;
-
-    /* set the cursor */
-    old_cursor = buf_cursor(buf);
-    buf_set_cursor(buf, 0);
-
-    for(row = 0; row < max_row; row++) {
-        size_t offset = (row * COLUMNS);
-        size_t row_offset = 0;
-
-        /* print the prefix and address */
-        row_offset = (size_t)snprintf(&row_buf[0], sizeof(row_buf),"%04zu", offset);
-
-        for(column = 0; column < COLUMNS && offset < buf_len(buf) && row_offset < (int)sizeof(row_buf); offset++, column++) {
-            row_offset += (size_t)snprintf(&row_buf[row_offset], sizeof(row_buf) - row_offset, " %02x", buf_get_uint8(buf));
-        }
-
-        /* zero terminate */
-        if(row_offset < sizeof(row_buf)) {
-            row_buf[row_offset] = (char)0;
-        } else {
-            /* this might truncate the string, but it is safe. */
-            row_buf[sizeof(row_buf)-1] = (char)0;
-        }
-
-        /* output it, finally */
-        fprintf(stderr,"%s\n", row_buf);
-    }
-
-    /* set the cursor back to where it was */
-    buf_set_cursor(buf, old_cursor);
-}

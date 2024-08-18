@@ -106,13 +106,13 @@ int dispatch_pccc_request(tcp_connection_p client_arg)
             client->conn_config.pccc_seq_id = buf_get_uint16_le(request);
 
             /* match the command. */
-            if(client->plc->plc_type == PLC_PLC5 && buf_match_bytes(request, PLC5_READ, sizeof(PLC5_READ))) {
+            if(client->plc->plc_type == PLC_TYPE_PLC5 && buf_match_bytes(request, PLC5_READ, sizeof(PLC5_READ))) {
                 rc = handle_plc5_read_request(client);
-            } else if(client->plc->plc_type == PLC_PLC5 && buf_match_bytes(request, PLC5_WRITE, sizeof(PLC5_WRITE))) {
+            } else if(client->plc->plc_type == PLC_TYPE_PLC5 && buf_match_bytes(request, PLC5_WRITE, sizeof(PLC5_WRITE))) {
                 rc = handle_plc5_write_request(client);
-            } else if((client->plc->plc_type == PLC_SLC || client->plc->plc_type == PLC_MICROLOGIX) && buf_match_bytes(request, SLC_READ, sizeof(SLC_READ))) {
+            } else if((client->plc->plc_type == PLC_TYPE_SLC || client->plc->plc_type == PLC_TYPE_MICROLOGIX) && buf_match_bytes(request, SLC_READ, sizeof(SLC_READ))) {
                 rc = handle_slc_read_request(client);
-            } else if((client->plc->plc_type == PLC_SLC || client->plc->plc_type == PLC_MICROLOGIX) && buf_match_bytes(request, SLC_WRITE, sizeof(SLC_WRITE))) {
+            } else if((client->plc->plc_type == PLC_TYPE_SLC || client->plc->plc_type == PLC_TYPE_MICROLOGIX) && buf_match_bytes(request, SLC_WRITE, sizeof(SLC_WRITE))) {
                 rc = handle_slc_write_request(client);
             } else {
                 info("Unsupported PCCC command!");

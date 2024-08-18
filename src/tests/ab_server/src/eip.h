@@ -35,9 +35,8 @@
 
 #include "plc.h"
 #include "utils/slice.h"
-#include "utils/tcp_server.h"
-
 #include "utils/status.h"
+#include "utils/tcp_server.h"
 
 /* EIP header size is 24 bytes. */
 const uint32_t EIP_HEADER_SIZE = (24);

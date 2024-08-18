@@ -35,6 +35,7 @@
 
 #include <stdbool.h>
 #include <stdint.h>
+#include <string.h>
 
 #include "status.h"
 
@@ -383,7 +384,7 @@ static inline bool slice_set_f64_le_at_ptr(slice_p slice, uint8_t *ptr, double v
     return slice_set_u64_le_at_ptr(slice, ptr, u_val);
 }
 
-static inline bool slice_get_f64_le_at_offset(slice_p slice, uint32_t offset, float *val)
+static inline bool slice_get_f64_le_at_offset(slice_p slice, uint32_t offset, double *val)
 {
     return slice && val && slice_get_f64_le_at_ptr(slice, slice->start + offset, val);
 }
