@@ -171,9 +171,15 @@ int parse_pccc_logical_address(const char *file_address, pccc_addr_t *address)
             break;
         }
 
-        if((rc = parse_pccc_file_num(&p, address)) != PLCTAG_STATUS_OK) {
+        /* we allow the file number to be skipped if it is output or input */
+        rc = parse_pccc_file_num(&p, address);
+        if(rc != PLCTAG_STATUS_OK &&
+           (address->file_type != PCCC_FILE_OUTPUT || address->file_type != PCCC_FILE_INPUT)) {
             pdebug(DEBUG_WARN, "Unable to parse PCCC-style tag for file number! Error %s!", plc_tag_decode_error(rc));
             break;
+        } else {
+            /* we succeeded parsing the file number or we have an I or O data file. */
+            rc = PLCTAG_STATUS_OK;
         }
 
         if((rc = parse_pccc_elem_num(&p, address)) != PLCTAG_STATUS_OK) {
@@ -761,6 +767,7 @@ int parse_pccc_file_type(const char **str, pccc_addr_t *address)
     case 'i': /* Input */
         pdebug(DEBUG_DETAIL, "Found Input file.");
         address->file_type = PCCC_FILE_INPUT;
+        address->file = 1; /* in case it is omitted */
         address->element_size_bytes = 2;
         (*str)++;
         break;
@@ -797,9 +804,11 @@ int parse_pccc_file_type(const char **str, pccc_addr_t *address)
 
     case 'O':
     case 'o': /* Output */
+        /* FIXME - Check if 0x82 is correct instead of 0x8b */
         pdebug(DEBUG_DETAIL, "Found Output file.");
         address->file_type = PCCC_FILE_OUTPUT;
         address->element_size_bytes = 2;
+        address->file = 0; /* in case it is omitted */
         (*str)++;
         break;
 
@@ -890,6 +899,7 @@ int parse_pccc_file_num(const char **str, pccc_addr_t *address)
         return PLCTAG_ERR_BAD_PARAM;
     }
 
+    /* FIXME - why are we not using strtol here? We should support octal. */
     while(**str && isdigit(**str) && tmp < 65535) {
         tmp *= 10;
         tmp += (int)((**str) - '0');
@@ -1235,4 +1245,3 @@ void encode_data(uint8_t *data, int *index, int val)
 //     pdebug(DEBUG_WARN, "Unknown file type %d!", (int)file_type);
 //     return 0x00;
 // }
-
