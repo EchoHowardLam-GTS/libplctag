@@ -44,8 +44,23 @@
 #endif
 
 
+
 extern status_t socket_open(const char *host, const char *port, bool is_server, SOCKET *sock_fd);
 extern void socket_close(SOCKET sock);
-extern status_t socket_accept(SOCKET sock, SOCKET *client_fd, uint32_t timeout_ms);
-extern status_t socket_read(SOCKET sock, slice_p in_buf, uint32_t timeout_ms);
-extern status_t socket_write(SOCKET sock, slice_p out_buf, uint32_t timeout_ms);
+
+typedef enum {
+    SOCKET_EVENT_NONE = 0,
+    SOCKET_EVENT_READ = (1 << 0),
+    SOCKET_EVENT_WRITE = (1 << 1),
+    SOCKET_EVENT_ACCEPT = (1 << 2),
+
+    SOCKET_EVENT_TIMEOUT = (1 << 8),
+
+} socket_event_t;
+
+/* return STATUS_NOT_FOUND if the socket is closed. */
+extern status_t socket_event_wait(SOCKET sock, socket_event_t events_wanted, socket_event_t *events_found, uint32_t timeout_ms);
+
+extern status_t socket_accept(SOCKET sock, SOCKET *client_fd);
+extern status_t socket_read(SOCKET sock, slice_p in_buf);
+extern status_t socket_write(SOCKET sock, slice_p out_buf);

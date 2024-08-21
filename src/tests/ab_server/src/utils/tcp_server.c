@@ -44,42 +44,87 @@
 #include "time_utils.h"
 
 
+
+
+struct tcp_connection_t {
+    /* client socket */
+    SOCKET sock_fd;
+
+    tcp_server_config_p server_config;
+    app_data_p app_data;
+    app_connection_data_p app_connection_data;
+
+    /* initial PDU */
+    pdu_t buffer;
+};
+
+typedef struct tcp_connection_t tcp_connection_t;
+
+typedef tcp_connection_t *tcp_connection_p;
+
+
+
 // static tcp_connection_p allocate_new_client(void *app_data);
-static THREAD_FUNC(tcp_client_connection_handler, connection_ptr_arg);
+static THREAD_FUNC(connection_handler, connection_ptr_arg);
 
-
-void tcp_server_run(const char *host, const char *port, volatile sig_atomic_t *terminate, tcp_connection_allocate_func allocator, void *app_data)
+tcp_server_run(tcp_server_config_p config)
 {
-    status_t sock_rc = STATUS_OK;
+    status_t rc = STATUS_OK;
     int listen_fd;
     int client_fd;
-    tcp_connection_p tcp_client = NULL;
+    tcp_connection_p connection = NULL;
     thread_t client_thread;
+    uint32_t client_state_size = sizeof(tcp_connection_t) + config->app_connection_data_size + config->buffer_size;
+    uint8_t *data_buffer = NULL;
 
-    sock_rc = socket_open(host, port, true, &listen_fd);
+    rc = socket_open(config->host, config->port, true, &listen_fd);
 
-    assert_error((sock_rc == STATUS_OK), "Unable to open listener TCP socket, error code!");
+    assert_error((rc == STATUS_OK), "Unable to open listener TCP socket, error code!");
 
     do {
         flood("Waiting for new client connections.");
-        sock_rc = socket_accept(listen_fd, &client_fd, 200);
+        rc = socket_accept(listen_fd, &client_fd, 200);
 
-        if(sock_rc == STATUS_OK) {
+        if(rc == STATUS_OK) {
             info("Allocating new TCP client.");
-            tcp_client = allocator(app_data);
+            connection = calloc(1, client_state_size);
 
-            assert_error((tcp_client), "Unable to allocate memory for new client connection!");
+            assert_error((connection), "Unable to allocate memory for new client connection!");
 
-            tcp_client->sock_fd = client_fd;
-            tcp_client->terminate = terminate;
+            if(!connection) {
+                warn("Unable to allocate memory for new client connection!");
+                break;
+            }
+
+            /* determine the pointers for the app connection data and the buffer into the large block of memory */
+            data_buffer = (uint8_t*)connection + sizeof(tcp_connection_t) + config->app_connection_data_size;
+
+            /* initialize the fields of the connection */
+            connection->sock_fd = client_fd;
+            connection->server_config = config;
+            connection->app_data = config->app_data;
+            connection->app_connection_data = (app_connection_data_p)((char*)connection + sizeof(tcp_connection_t));
+            connection->buffer.request.start = data_buffer;
+            connection->buffer.request.end = data_buffer + config->buffer_size;
+            connection->buffer.response.start = data_buffer;
+            connection->buffer.response.end = data_buffer + config->buffer_size;
+
+            /* call the app-provided connection state init function to set up the state */
+            rc = config->init_app_connection_data(connection->app_connection_data, connection->app_data);
+            if(rc != STATUS_OK) {
+                warn("Error %s trying to initialize application connection data!", status_to_str(rc));
+                break;
+            }
 
             /* create the thread for the connection */
             info("Creating thread to handle the new connection.");
-            thread_create(&client_thread, tcp_client_connection_handler, (thread_arg_t)tcp_client);
+            thread_create(&client_thread, connection_handler, (thread_arg_t)connection);
 
             assert_error((client_thread), "Unable to create client connection handler thread!");
         } /* else any other value than timeout and we'll drop out of the loop */
-    } while(!*terminate && (sock_rc == STATUS_OK || sock_rc == STATUS_ERR_TIMEOUT));
+    } while(!(config->program_terminating(config->app_data)) && (rc == STATUS_OK || rc == STATUS_TIMEOUT));
+
+    config->terminate_program(config->app_data);
 
     info("TCP server run function quitting.");
 
@@ -99,54 +144,51 @@ void tcp_server_run(const char *host, const char *port, volatile sig_atomic_t *t
 /******** Helpers *********/
 
 
-THREAD_FUNC(tcp_client_connection_handler, connection_ptr_arg)
+THREAD_FUNC(connection_handler, connection_ptr_arg)
 {
-    status_t conn_rc = STATUS_OK;
-    status_t sock_rc = STATUS_OK;
+    status_t rc = STATUS_OK;
     tcp_connection_p connection = (tcp_connection_p)connection_ptr_arg;
     slice_t request = {0};
     slice_t response = {0};
     slice_t remaining_buffer = {0};
+    pdu_t pdu = {0};
 
     info("Got new client connection, going into processing loop.");
     do {
-        conn_rc = STATUS_OK;
-        sock_rc = STATUS_OK;
+        rc = STATUS_OK;
 
         /* reset the buffers */
         detail("Resetting request and response buffers.");
-        request = connection->request_buffer;
-        response = connection->response_buffer;
+        request = connection->buffer.request;
+        response = connection->buffer.response;
         remaining_buffer = request;
 
         do {
             /* get an incoming packet or a partial packet. */
-            sock_rc = socket_read(connection->sock_fd, &remaining_buffer, 100);
+            rc = socket_read(connection->sock_fd, &remaining_buffer, 100);
 
             /* did we get data? */
-            if(sock_rc == STATUS_OK) {
+            if(rc == STATUS_OK) {
                 /* set the request end to the end of the new data */
-                if(!slice_truncate_to_ptr(&request, remaining_buffer.start)) {
-                    warn("Unable to truncate request slice!");
-                    conn_rc = STATUS_ERR_OP_FAILED;
+                if((rc = slice_truncate_to_ptr(&request, remaining_buffer.start)) != STATUS_OK) {
+                    warn("Error %s trying to truncate request slice!", status_to_str(rc));
                     break;
                 }
 
                 /* try to process the packet. */
-                conn_rc = connection->handler(&request, &response, connection);
+                pdu.request = request;
+                pdu.response = response;
+                rc = connection->server_config->process_request(&pdu, connection->app_connection_data, connection->app_data);
             }
-        } while(!*(connection->terminate)
-                && (sock_rc == STATUS_OK || sock_rc == STATUS_ERR_TIMEOUT)
-                && conn_rc == STATUS_ERR_RESOURCE
-               );
+        } while(!connection->server_config->program_terminating(connection->app_data) && (rc == STATUS_OK || rc == STATUS_TIMEOUT));
 
         /* check the response. */
         if(conn_rc == STATUS_OK) {
             /* write out the response */
             do {
-                sock_rc = socket_write(connection->sock_fd, &response, 100);
+                rc = socket_write(connection->sock_fd, &response, 100);
             } while(!*(connection->terminate)
-                    && (sock_rc == STATUS_OK || sock_rc == STATUS_ERR_TIMEOUT)
+                    && (rc == STATUS_OK || rc == STATUS_TIMEOUT)
                     && slice_get_len(&response) > 0
                    );
 

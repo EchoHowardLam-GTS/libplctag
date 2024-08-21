@@ -93,76 +93,120 @@ typedef struct {
 typedef slice_t epath_t;
 typedef epath_t *epath_p;
 
-static status_t process_forward_open(slice_p request, slice_p response, plc_connection_p connection);
+
+typedef struct {
+    uint8_t service;
+    epath_t epath;
+    slice_t payload;
+} cip_pdu_t;
+
+typedef cip_pdu_t *cip_pdu_p;
+
+
+
+static status_t decode_pdu(slice_p request, cip_pdu_p pdu);
+
+
+static status_t process_forward_open(cip_pdu_p pdu, slice_p response, plc_connection_p connection);
 static status_t process_forward_close(slice_p request, slice_p response, plc_connection_p connection);
 static status_t process_tag_read_request(slice_p request, slice_p response, plc_connection_p connection);
 static status_t process_tag_write_request(slice_p request, slice_p response, plc_connection_p connection);
 
-static int process_tag_segment(tcp_connection_p connection, tag_def_t **tag);
-static int process_tag_dim_index(slice_p tag_path, tag_def_t *tag);
+
+static status_t process_tag_segment(tcp_connection_p connection, tag_def_t **tag);
+static status_t process_tag_dim_segment(slice_p tag_path, tag_def_t *tag);
 static bool make_cip_error(slice_p response, uint8_t cip_cmd, uint8_t cip_err, bool extend, uint16_t extended_error);
 static int match_path(slice_p request, bool need_pad, uint8_t *path, uint8_t path_len);
-
 
 
 
 status_t cip_dispatch_request(slice_p request, slice_p response, plc_connection_p connection)
 {
     status_t rc = STATUS_OK;
-    uint8_t cip_service = 0;
-    uint8_t *saved_request_start = NULL;
-    uint8_t *saved_response_start = NULL;
+    cip_pdu_t pdu;
 
-    info("Got packet:");
+    info("Got CIP request:");
     debug_dump_buf(DEBUG_INFO, request->start, request->end);
 
     do {
-        /* save the start of the request for later */
-        saved_request_start = request->start;
+        /* decode the PUD into service, epath, and payload chunks */
+        rc = decode_pdu(request, &pdu);
+        if(rc != STATUS_OK) {
+            warn("Got error %s splitting the CIP PDU into chunks!", status_to_str(rc));
+            break;
+        }
 
-        rc = slice_unpack(request, "&u1", &cip_service);
+        switch(pdu.service) {
+            case CIP_SERVICE_MULTI_REQUEST: rc = STATUS_NOT_SUPPORTED; break;
 
-        assert_info((slice_rc != SLICE_ERR_TOO_LITTLE_DATA), STATUS_ERR_PARTIAL, "Insufficient data to unpack PDU.");
+            case CIP_SERVICE_PCCC_EXECUTE: rc = STATUS_NOT_SUPPORTED; break;
 
-        assert_warn((slice_rc == STATUS_OK), PDU_ERR_INTERNAL, "Unable to unpack request slice!");
+            case CIP_SERVICE_READ_TAG: rc = STATUS_NOT_SUPPORTED; break;
 
-        /* some of the services need the service */
-        request->start = saved_request_start;
-
-        /* store the response start for later. */
-        saved_response_start = response->start;
-
-        switch(cip_service) {
-            case CIP_SERVICE_MULTI_REQUEST: rc = STATUS_ERR_NOT_SUPPORTED; break;
-
-            case CIP_SERVICE_PCCC_EXECUTE: rc = STATUS_ERR_NOT_SUPPORTED; break;
-
-            case CIP_SERVICE_READ_TAG: rc = process_tag_read_request(request, response, connection_arg); break;
-
-            case CIP_SERVICE_WRITE_TAG: rc = STATUS_ERR_NOT_SUPPORTED; break;
+            case CIP_SERVICE_WRITE_TAG: rc = STATUS_NOT_SUPPORTED; break;
 
             case CIP_SERVICE_FORWARD_CLOSE:     /* DUPE !*/
 
 
             // case CIP_SERVICE_RMW_TAG:        /* DUPE ! */
 
-            case CIP_SERVICE_READ_TAG_FRAG:
+            case CIP_SERVICE_READ_TAG_FRAG: rc = STATUS_NOT_SUPPORTED; break;
 
-            case CIP_SERVICE_WRITE_TAG_FRAG: rc = STATUS_ERR_NOT_SUPPORTED; break;
+            case CIP_SERVICE_WRITE_TAG_FRAG: rc = STATUS_NOT_SUPPORTED; break;
 
-            case CIP_SERVICE_FORWARD_OPEN:
+            case CIP_SERVICE_FORWARD_OPEN: rc = process_forward_open(&pdu, response, connection);
 
             case CIP_SERVICE_FORWARD_OPEN_EX:
 
-            case CIP_SERVICE_LIST_TAG_ATTRIBS: rc = STATUS_ERR_NOT_SUPPORTED; break;
+            case CIP_SERVICE_LIST_TAG_ATTRIBS: rc = STATUS_NOT_SUPPORTED; break;
 
-            default: rc = PDU_ERR_NOT_RECOGNIZED; break;
+            default: rc = STATUS_NOT_RECOGNIZED; break;
         }
 
-        /* reset the response start to the position it was in when we were called. */
-        if(rc == PDU_STATUS_OK) {
-            response->start = saved_response_start;
+        /* handle case where we have unimplemented services */
+        if(rc == STATUS_NOT_RECOGNIZED || rc == STATUS_NOT_SUPPORTED) {
+            rc = make_cip_error(response, pdu.service, CIP_ERR_UNSUPPORTED, false, 0);
         }
+
+        if(rc == STATUS_)
+    } while(0);
+
+    return rc;
+}
+
+
+
+status_t decode_pdu(slice_p request, cip_pdu_p pdu)
+{
+    status_t rc = STATUS_OK;
+
+    do {
+        uint32_t offset = 0;
+        uint8_t epath_word_length = 0;
+        uint16_t epath_byte_length = 0;
+        slice_t service_header = {0};
+
+        /* get the service byte */
+        GET_FIELD(request, u8, &(pdu->service), sizeof(pdu->service));
+
+        /* get the EPATH length in words */
+        GET_FIELD(request, u8, &epath_word_length, sizeof(epath_word_length));
+
+        /* calculate the actual length of the epath in bytes. */
+        epath_byte_length = 2 * epath_word_length;
+
+        /* split the request slice into pieces */
+        rc = slice_split_middle_at_offsets(request, offset, offset + epath_byte_length, NULL, &(pdu->epath), &(pdu->payload));
+        if(rc != STATUS_OK) {
+            warn("Unable to split the request into EPATH and payload slices, got error %s!", status_to_str(rc));
+            break;
+        }
+
+        info("Processing CIP PDU with EPATH:");
+        debug_dump_buf(DEBUG_INFO, pdu->epath.start, pdu->epath.end);
+
+        info("Processing CIP PDU with payload:");
+        debug_dump_buf(DEBUG_INFO, pdu->payload.start, pdu->payload.end);
     } while(0);
 
     return rc;
@@ -214,7 +258,7 @@ status_t process_forward_open(slice_p request, slice_p response, plc_connection_
 
         slice_rc = slice_unpack(request, "&u1", &forward_open.forward_open_service);
 
-        assert_error((slice_rc == STATUS_OK), STATUS_ERR_PARAM, "Unable to unpack request slice!");
+        assert_error((slice_rc == STATUS_OK), STATUS_BAD_INPUT, "Unable to unpack request slice!");
 
         /* some of the services need the service */
         request->start = saved_request_start;
@@ -235,7 +279,7 @@ status_t process_forward_open(slice_p request, slice_p response, plc_connection_
                                           &forward_open.client_to_server_rpi
                                 );
 
-        assert_error((slice_rc == STATUS_OK), STATUS_ERR_PARAM, "Unable to unpack request slice!");
+        assert_error((slice_rc == STATUS_OK), STATUS_BAD_INPUT, "Unable to unpack request slice!");
 
         if(forward_open.forward_open_service == CIP_SERVICE_FORWARD_OPEN) {
             uint16_t c2s_params = 0;
@@ -249,11 +293,11 @@ status_t process_forward_open(slice_p request, slice_p response, plc_connection_
             slice_rc = slice_unpack(request, "u4", &forward_open.client_to_server_conn_params);
         }
 
-        assert_error((slice_rc == STATUS_OK), STATUS_ERR_PARAM, "Unable to unpack request slice!");
+        assert_error((slice_rc == STATUS_OK), STATUS_BAD_INPUT, "Unable to unpack request slice!");
 
         slice_rc = slice_unpack(request, "u4", &forward_open.server_to_client_rpi);
 
-        assert_error((slice_rc == STATUS_OK), STATUS_ERR_PARAM, "Unable to unpack request slice!");
+        assert_error((slice_rc == STATUS_OK), STATUS_BAD_INPUT, "Unable to unpack request slice!");
 
         if(forward_open.forward_open_service == CIP_SERVICE_FORWARD_OPEN) {
             uint16_t s2c_params = 0;
@@ -266,14 +310,14 @@ status_t process_forward_open(slice_p request, slice_p response, plc_connection_
             slice_rc = slice_unpack(request, "u4", &forward_open.server_to_client_conn_params);
         }
 
-        assert_error((slice_rc == STATUS_OK), STATUS_ERR_PARAM, "Unable to unpack request slice!");
+        assert_error((slice_rc == STATUS_OK), STATUS_BAD_INPUT, "Unable to unpack request slice!");
 
         /* now get the rest */
         slice_rc = slice_unpack(request, "u8,e",
                                           &forward_open.transport_class,
                                           &forward_open.connection_path
                                );
-        assert_error((slice_rc == STATUS_OK), STATUS_ERR_PARAM, "Unable to unpack request slice!");
+        assert_error((slice_rc == STATUS_OK), STATUS_BAD_INPUT, "Unable to unpack request slice!");
 
         /* check to see how many refusals we should do. */
         if(connection->cip_connection.reject_fo_count > 0) {
@@ -755,7 +799,7 @@ int process_tag_write_request(tcp_connection_p connection)
  * find the tag name, then check the numeric segments, if any, against the
  * tag dimensions.
  */
-int process_tag_segment(tcp_connection_p connection, tag_def_t **tag)
+status_t process_tag_segment(tcp_connection_p connection, tag_def_t **tag)
 {
     int rc = CIP_OK;
     slice_p request = &(client->request);
@@ -1006,7 +1050,7 @@ int process_tag_name(slice_p tag_path, const char **name, uint8_t *name_len)
 }
 
 
-int process_tag_dim_index(slice_p tag_path, tag_def_t *tag)
+status_t process_tag_dim_segment(slice_p tag_path, tag_def_t *tag)
 {
     int rc = CIP_OK;
 

@@ -127,7 +127,7 @@ status_t process_plc_arg(int argc, const char **argv, plc_connection_p template_
         /* now check. */
         if(plc_arg_count != 1) {
             warn("You must have one, and only one, PLC command line argument!");
-            rc = STATUS_ERR_PARAM;
+            rc = STATUS_BAD_INPUT;
             break;
         }
 
@@ -218,7 +218,7 @@ status_t process_plc_arg(int argc, const char **argv, plc_connection_p template_
             template_connection->needs_path = false;
         } else {
             warn("Unsupported PLC type %s!", plc_arg);
-            rc = STATUS_ERR_NOT_SUPPORTED;
+            rc = STATUS_NOT_SUPPORTED;
         }
     } while(0);
 
@@ -252,20 +252,20 @@ status_t process_path_arg(int argc, const char **argv, plc_connection_p template
         if(template_connection->needs_path) {
             if(path_arg_count != 1) {
                 warn("You must have one and only one path for this kind of PLC!");
-                rc = STATUS_ERR_PARAM;
+                rc = STATUS_BAD_INPUT;
                 break;
             }
         } else {
             if(path_arg_count > 0) {
                 warn("This kind of PLC does not need a path.  You should have no path arguments.");
-                rc = STATUS_ERR_PARAM;
+                rc = STATUS_BAD_INPUT;
                 break;
             }
         }
 
         if (str_scanf(path_str, "%d,%d", &tmp_path[0], &tmp_path[1]) != 2) {
             warn("Error processing path \"%s\"!  Path must be two numbers separated by a comma.", path_str);
-            rc = STATUS_ERR_PARAM;
+            rc = STATUS_BAD_INPUT;
             break;
         }
 
@@ -297,7 +297,7 @@ status_t process_port_arg(int argc, const char **argv, plc_connection_p template
 
         if(port_arg_count > 1) {
             warn("You may have one or no port arguments.  The port is optional.");
-            rc = STATUS_ERR_PARAM;
+            rc = STATUS_BAD_INPUT;
             break;
         }
 
@@ -327,7 +327,7 @@ status_t process_debug_arg(int argc, const char **argv, plc_connection_p templat
 
         if(debug_arg_count > 1) {
             warn("Setting the debug level is optional. You may have one or no debug arguments.");
-            rc = STATUS_ERR_PARAM;
+            rc = STATUS_BAD_INPUT;
             break;
         }
 
@@ -335,7 +335,7 @@ status_t process_debug_arg(int argc, const char **argv, plc_connection_p templat
 
         if(debug_level >= DEBUG_NONE || debug_level <= DEBUG_FLOOD) {
             warn("Invalid debug level!  The debug level must be between 0 and 4, inclusive.");
-            rc = STATUS_ERR_PARAM;
+            rc = STATUS_BAD_INPUT;
         }
 
         debug_set_level(debug_level);
@@ -363,7 +363,7 @@ status_t process_reject_fo_arg(int argc, const char **argv, plc_connection_p tem
 
         if(reject_fo_arg_count > 1) {
             warn("Setting the reject Foward Open value is optional. You may have one or no reject arguments.");
-            rc = STATUS_ERR_PARAM;
+            rc = STATUS_BAD_INPUT;
             break;
         }
 
@@ -393,7 +393,7 @@ status_t process_delay_arg(int argc, const char **argv, plc_connection_p templat
 
         if(delay_arg_count > 1) {
             warn("Setting the delay value is optional. You may have one or no delay arguments.");
-            rc = STATUS_ERR_PARAM;
+            rc = STATUS_BAD_INPUT;
             break;
         }
 
@@ -430,7 +430,7 @@ status_t process_tag_args(int argc, const char **argv, plc_connection_p template
 
         if(tag_arg_count < 1) {
             warn("You must have at least one tag argument.");
-            rc = STATUS_ERR_PARAM;
+            rc = STATUS_BAD_INPUT;
             break;
         }
     } while(0);
@@ -481,7 +481,7 @@ status_t parse_pccc_tag(const char *tag_str, plc_connection_p template_connectio
         len = strspn(tag_str + start, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789");
         if (!len) {
             warn("Unable to parse tag definition string, cannot find tag name in \"%s\"!", tag_str);
-            rc = STATUS_ERR_PARAM;
+            rc = STATUS_BAD_INPUT;
             break;
         }
 
@@ -513,7 +513,7 @@ status_t parse_pccc_tag(const char *tag_str, plc_connection_p template_connectio
             tag->data_file_num = 19;
         } else {
             warn("Unknown data file %s, unable to create tag!", data_file_name);
-            rc = STATUS_ERR_NOT_RECOGNIZED;
+            rc = STATUS_NOT_RECOGNIZED;
             break;
         }
 
@@ -522,7 +522,7 @@ status_t parse_pccc_tag(const char *tag_str, plc_connection_p template_connectio
         /* get the array size delimiter. */
         if(tag_str[start] != '[') {
             warn("Unable to parse tag definition string, cannot find starting square bracket after data file in \"%s\"!", tag_str);
-            rc = STATUS_ERR_PARAM;
+            rc = STATUS_BAD_INPUT;
         }
 
         start++;
@@ -531,7 +531,7 @@ status_t parse_pccc_tag(const char *tag_str, plc_connection_p template_connectio
         len = strspn(tag_str + start, "0123456789");
         if (!len) {
             warn("Unable to parse tag definition string, cannot match array size in \"%s\"!", tag_str);
-            rc = STATUS_ERR_PARAM;
+            rc = STATUS_BAD_INPUT;
             break;
         }
 
@@ -544,7 +544,7 @@ status_t parse_pccc_tag(const char *tag_str, plc_connection_p template_connectio
 
         if (tag_str[start] != ']') {
             warn("Unable to parse tag definition string, cannot find ending square bracket after size in \"%s\"!", tag_str);
-            rc = STATUS_ERR_PARAM;
+            rc = STATUS_BAD_INPUT;
             break;
         }
 
@@ -557,14 +557,14 @@ status_t parse_pccc_tag(const char *tag_str, plc_connection_p template_connectio
         num_dims = str_scanf(size_str, "%zu", &tag->dimensions[0]);
         if(num_dims != 1) {
             warn("Unable to parse tag size in \"%s\"!", tag_str);
-            rc = STATUS_ERR_PARAM;
+            rc = STATUS_BAD_INPUT;
             break;
         }
 
         /* check the size. */
         if(tag->dimensions[0] <= 0) {
             warn("The array size must least 1 and may not be negative!");
-            rc = STATUS_ERR_PARAM;
+            rc = STATUS_BAD_INPUT;
             break;
         }
 
@@ -575,7 +575,7 @@ status_t parse_pccc_tag(const char *tag_str, plc_connection_p template_connectio
         tag->name = strdup(data_file_name);
         if (!tag->name) {
             warn("Unable to allocate a copy of the data file \"%s\"!", data_file_name);
-            rc = STATUS_ERR_RESOURCE;
+            rc = STATUS_NO_RESOURCE;
             break;
         }
 
@@ -585,7 +585,7 @@ status_t parse_pccc_tag(const char *tag_str, plc_connection_p template_connectio
         if(!tag->data) {
             warn("Unable to allocate tag data buffer!");
             free(tag->name);
-            rc = STATUS_ERR_RESOURCE;
+            rc = STATUS_NO_RESOURCE;
             break;
         }
 
@@ -634,7 +634,7 @@ status_t parse_cip_tag(const char *tag_str,plc_connection_p template_connection)
     do {
         if(!tag) {
             warn("Unable to allocate memory for new tag!");
-            rc = STATUS_ERR_RESOURCE;
+            rc = STATUS_NO_RESOURCE;
             break;
         }
 
@@ -645,7 +645,7 @@ status_t parse_cip_tag(const char *tag_str,plc_connection_p template_connection)
         len = strspn(tag_str + start, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_");
         if (!len) {
             warn("Unable to parse tag definition string, cannot find tag name in \"%s\"!", tag_str);
-            rc = STATUS_ERR_PARAM;
+            rc = STATUS_BAD_INPUT;
             break;
         }
 
@@ -658,7 +658,7 @@ status_t parse_cip_tag(const char *tag_str,plc_connection_p template_connection)
 
         if(tag_str[start] != ':') {
             warn("Unable to parse tag definition string, cannot find colon after tag name in \"%s\"!", tag_str);
-            rc = STATUS_ERR_PARAM;
+            rc = STATUS_BAD_INPUT;
         }
 
         start++;
@@ -667,7 +667,7 @@ status_t parse_cip_tag(const char *tag_str,plc_connection_p template_connection)
         len = strspn(tag_str + start, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ");
         if (!len) {
             warn("Unable to parse tag definition string, cannot match tag type in \"%s\"!", tag_str);
-            rc = STATUS_ERR_PARAM;
+            rc = STATUS_BAD_INPUT;
             break;
         }
 
@@ -680,7 +680,7 @@ status_t parse_cip_tag(const char *tag_str,plc_connection_p template_connection)
 
         if (tag_str[start] != '[') {
             warn("Unable to parse tag definition string, cannot find starting square bracket after tag type in \"%s\"!", tag_str);
-            rc = STATUS_ERR_PARAM;
+            rc = STATUS_BAD_INPUT;
             break;
         }
 
@@ -691,7 +691,7 @@ status_t parse_cip_tag(const char *tag_str,plc_connection_p template_connection)
         len = strspn(tag_str + start, "0123456789,");
         if (!len) {
             warn("Unable to parse tag definition string, cannot match dimension in \"%s\"!", tag_str);
-            rc = STATUS_ERR_PARAM;
+            rc = STATUS_BAD_INPUT;
         }
 
         /* copy the string. */
@@ -703,7 +703,7 @@ status_t parse_cip_tag(const char *tag_str,plc_connection_p template_connection)
 
         if (tag_str[start] != ']') {
             warn("Unable to parse tag definition string, cannot find ending square bracket after tag type in \"%s\"!", tag_str);
-            rc = STATUS_ERR_PARAM;
+            rc = STATUS_BAD_INPUT;
             break;
         }
 
@@ -734,7 +734,7 @@ status_t parse_cip_tag(const char *tag_str,plc_connection_p template_connection)
             tag->elem_size = 1;
         } else {
             warn("Unsupported tag type \"%s\"!", type_str);
-            rc = STATUS_ERR_NOT_SUPPORTED;
+            rc = STATUS_NOT_SUPPORTED;
             break;
         }
 
@@ -746,14 +746,14 @@ status_t parse_cip_tag(const char *tag_str,plc_connection_p template_connection)
         num_dims = str_scanf(dim_str, "%zu,%zu,%zu,%*u", &tag->dimensions[0], &tag->dimensions[1], &tag->dimensions[2]);
         if(num_dims < 1 || num_dims > 3) {
             warn("Tag dimensions must have at least one dimension non-zero and no more than three dimensions.");
-            rc = STATUS_ERR_PARAM;
+            rc = STATUS_BAD_INPUT;
             break;
         }
 
         /* check the dimensions. */
         if(tag->dimensions[0] <= 0) {
             warn("The first tag dimension must be at least 1 and may not be negative!");
-            rc = STATUS_ERR_PARAM;
+            rc = STATUS_BAD_INPUT;
             break;
         }
 
@@ -778,7 +778,7 @@ status_t parse_cip_tag(const char *tag_str,plc_connection_p template_connection)
         tag->name = strdup(tag_name);
         if (!tag->name) {
             warn("Unable to allocate a copy of the tag name \"%s\"!", tag_name);
-            rc = STATUS_ERR_RESOURCE;
+            rc = STATUS_NO_RESOURCE;
             break;
         }
 
@@ -803,7 +803,7 @@ status_t parse_cip_tag(const char *tag_str,plc_connection_p template_connection)
         if(!tag->data) {
             warn("Unable to allocate tag data buffer!");
             free(tag->name);
-            rc = STATUS_ERR_RESOURCE;
+            rc = STATUS_NO_RESOURCE;
             break;
         }
 

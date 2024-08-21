@@ -54,13 +54,17 @@ static inline status_t mutex_create(mutex_t *mut)
 {
     status_t rc = STATUS_OK;
 
+    if(!mut) {
+        return STATUS_NULL_PTR;
+    }
+
 #if defined(IS_WINDOWS)
     *mut = CreateMutex(NULL,                  /* default security attributes  */
                      FALSE,                  /* initially not owned          */
                      NULL);                  /* unnamed mutex                */
-    if(!*mut) { rc = STATUS_ERR_OP_FAILED; }
+    if(!*mut) { rc = STATUS_OP_FAILED; }
 #else
-    if(pthread_mutex_init(mut, NULL)) { rc = STATUS_ERR_OP_FAILED; }
+    if(pthread_mutex_init(mut, NULL)) { rc = STATUS_INTERNAL_FAILURE; }
 #endif
 
     return rc;
@@ -71,6 +75,10 @@ static inline status_t mutex_lock(mutex_t *mut)
 {
     status_t rc = STATUS_OK;
 
+    if(!mut) {
+        return STATUS_NULL_PTR;
+    }
+
 #if defined(IS_WINDOWS)
     DWORD dwWaitResult = ~WAIT_OBJECT_0;;
 
@@ -79,7 +87,7 @@ static inline status_t mutex_lock(mutex_t *mut)
     }
 #else
     if(pthread_mutex_lock(mut)) {
-        rc = STATUS_ERR_OP_FAILED;
+        rc = STATUS_INTERNAL_FAILURE;
     }
 #endif
 
@@ -91,13 +99,17 @@ static inline status_t mutex_unlock(mutex_t *mut)
 {
     status_t rc = STATUS_OK;
 
+    if(!mut) {
+        return STATUS_NULL_PTR;
+    }
+
 #if defined(IS_WINDOWS)
     if(!ReleaseMutex(mut)) {
-        rc = STATUS_ERR_OP_FAILED;
+        rc = STATUS_INTERNAL_FAILURE;
     }
 #else
     if(pthread_mutex_unlock(mut)) {
-        rc = STATUS_ERR_OP_FAILED;
+        rc = STATUS_INTERNAL_FAILURE;
     }
 #endif
 
@@ -109,11 +121,15 @@ static inline status_t mutex_destroy(mutex_t *mut)
 {
     status_t rc = STATUS_OK;
 
+    if(!mut) {
+        return STATUS_NULL_PTR;
+    }
+
 #if defined(IS_WINDOWS)
     CloseHandle(mut);
 #else
     if(pthread_mutex_destroy(mut)) {
-        rc = STATUS_ERR_OP_FAILED;
+        rc = STATUS_INTERNAL_FAILURE;
     }
 #endif
 

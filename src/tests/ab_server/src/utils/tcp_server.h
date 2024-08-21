@@ -36,29 +36,59 @@
 #include <signal.h>
 #include "slice.h"
 #include "socket.h"
+#include "status.h"
 
 
 
-typedef struct tcp_connection_t *(*tcp_connection_allocate_func)(void *app_data);
-typedef status_t (*tcp_client_handler_func)(slice_p request, slice_p response, struct tcp_connection_t *connection);
+typedef struct {
+    slice_t request;
+    slice_t response;
+} pdu_t;
 
-typedef struct tcp_connection_t {
-    SOCKET sock_fd;
-
-    /* need this in the thread and main loop */
-    volatile sig_atomic_t *terminate;
-
-    /* the following must be set up by the allocation function */
-
-    /* data buffers for requests and responses */
-    slice_t request_buffer;
-    slice_t response_buffer;
-
-    /* filled in by the application's allocator function */
-    tcp_client_handler_func handler;
-} tcp_connection_t;
-
-typedef tcp_connection_t *tcp_connection_p;
+typedef pdu_t *pdu_p;
 
 
-extern void tcp_server_run(const char *host, const char *port, volatile sig_atomic_t *terminate, tcp_connection_allocate_func allocator, void *app_data);
+struct app_data_t {
+
+};
+
+typedef struct app_data_t app_data_t;
+typedef struct app_data_t *app_data_p;
+
+
+struct app_connection_data_t {
+
+};
+
+typedef struct app_connection_data_t app_connection_data_t;
+typedef struct app_connection_data_t *app_connection_data_p;
+
+
+
+typedef bool (*program_terminating_func)(app_data_p app_data);
+typedef void (*terminate_program_func)(app_data_p app_data);
+typedef status_t (*init_app_connection_data_func)(app_connection_data_p app_connection_data, app_data_p app_data);
+typedef status_t (*clean_up_app_connection_data_func)(app_connection_data_p app_connection_data, app_data_p app_data);
+typedef status_t (*process_request_func)(pdu_p pdu, app_connection_data_p app_connection_data, app_data_p app_data);
+
+
+typedef struct tcp_server_config_t {
+    const char *host;
+    const char *port;
+
+    uint32_t buffer_size;
+    uint32_t app_connection_data_size;
+
+    app_data_p app_data;
+
+    program_terminating_func program_terminating;
+    terminate_program_func terminate_program;
+    init_app_connection_data_func init_app_connection_data;
+    clean_up_app_connection_data_func clean_up_app_connection_data;
+    process_request_func process_request;
+} tcp_server_config_t;
+
+typedef struct tcp_server_config_t *tcp_server_config_p;
+
+
+extern void tcp_server_run(tcp_server_config_p config);

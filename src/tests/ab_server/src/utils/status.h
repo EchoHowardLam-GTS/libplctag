@@ -39,24 +39,37 @@ typedef enum {
     STATUS_OK = 0,
     STATUS_PENDING,
     STATUS_TERMINATE,
+    STATUS_WOULD_BLOCK,
 
-    STATUS_ERR_NULL_PTR = -1000,
-    STATUS_ERR_RESOURCE,
-    STATUS_ERR_NOT_FOUND,
-    STATUS_ERR_NOT_RECOGNIZED,
-    STATUS_ERR_NOT_SUPPORTED,
-    STATUS_ERR_PARAM,
-    STATUS_ERR_OP_FAILED,
-    STATUS_ERR_TIMEOUT,
-    STATUS_ERR_ABORTED,
-    STATUS_ERR_BUSY,
-    STATUS_ERR_PARTIAL,
-    STATUS_ERR_OUT_OF_BOUNDS,
+    /* warnings */
+    STATUS_NOT_FOUND = 1000,
+    STATUS_NOT_RECOGNIZED,
+    STATUS_NOT_SUPPORTED,
+    STATUS_BAD_INPUT,
+    STATUS_ABORTED,
+    STATUS_BUSY,
+    STATUS_PARTIAL,
+    STATUS_OUT_OF_BOUNDS,
+    STATUS_TIMEOUT,
+    STATUS_NULL_PTR,
+    STATUS_NO_RESOURCE,
+    STATUS_SETUP_FAILURE,
+    STATUS_INTERNAL_FAILURE,
+    STATUS_EXTERNAL_FAILURE,
+
+    /* makes any warning an error, gnerally not recoverable */
+    STATUS_ERROR = 1000,
 } status_t;
+
+
+static inline bool status_is_warning(status_t status)
+{
+    return (status >= 1000 && status < 2000 ? true : false);
+}
 
 static inline bool status_is_error(status_t status)
 {
-    return (status < 0 ? true : false);
+    return (status >= 2000 ? true : false);
 }
 
 extern const char *status_to_str(status_t status);

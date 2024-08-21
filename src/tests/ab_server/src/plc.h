@@ -37,6 +37,8 @@
 #include <stdint.h>
 
 #include "utils/mutex_compat.h"
+#include "utils/tcp_server.h"
+
 // #include "eip.h"
 // #include "cpf.h"
 // #include "cip.h"
@@ -144,21 +146,36 @@ typedef struct {
 typedef plc_connection_t *plc_connection_p;
 
 
-#define GET_FIELD(SLICE, TYPE, ADDR, SIZE)                                    \
-        if(slice_get_ ## TYPE ## _le_at_offset((SLICE), offset, (ADDR))) {    \
-            warn("Unable to get field at offset %"PRIu32"!", offset);         \
-            rc = STATUS_ERR_OP_FAILED;                                            \
-            break;                                                            \
-        }                                                                     \
+struct pdu_t {
+    slice_t request_header_slice;
+    slice_t request_payload_slice;
+    slice_t response_header_slice;
+    slice_t response_payload_slice;
+};
+
+typedef struct pdu_t pdu_t;
+typedef pdu_t *pdu_p;
+
+
+static inline bool program_terminating(plc_connection_p connection)
+{
+    return !connection || *(connection->tcp_connection.terminate);
+}
+
+
+#define GET_FIELD(SLICE, TYPE, ADDR, SIZE)                                                          \
+        if((rc = slice_get_ ## TYPE ## _le_at_offset((SLICE), offset, (ADDR))) != STATUS_OK) {      \
+            warn("Unable to get field at offset %"PRIu32"! Error: %s!", offset, status_to_str(rc)); \
+           break;                                                                                   \
+        }                                                                                           \
         offset += (SIZE)
 
 
-#define SET_FIELD(SLICE, TYPE, VAL, SIZE)                                     \
-        if(slice_set_ ## TYPE ## _le_at_offset((SLICE), offset, (VAL))) {     \
-            warn("Unable to set field at offset %"PRIu32"!", offset);         \
-            rc = STATUS_ERR_OP_FAILED;                                            \
-            break;                                                            \
-        }                                                                     \
+#define SET_FIELD(SLICE, TYPE, VAL, SIZE)                                                           \
+        if((rc = slice_set_ ## TYPE ## _le_at_offset((SLICE), offset, (VAL))) != STATUS_OK) {       \
+            warn("Unable to set field at offset %"PRIu32"! Error: %s!", offset, status_to_str(rc)); \
+            break;                                                                                  \
+        }                                                                                           \
         offset += (SIZE)
 
 

@@ -58,6 +58,103 @@ static status_t check_or_allocate(slice_p slice, uint32_t required_size);
 uint32_t *get_byte_order(size_t size, bool little_endian, bool word_swap);
 
 
+status_t slice_split_at_ptr(slice_p source, uint8_t *cut_ptr, slice_p first_part, slice_p second_part)
+{
+    status_t rc = STATUS_OK;
+
+    do {
+        if(!source || !cut_ptr) {
+            rc = STATUS_NULL_PTR;
+            break;;
+        }
+
+        if(!first_part && !second_part) {
+            rc = STATUS_NULL_PTR;
+            break;
+        }
+
+        if(!slice_contains_ptr(source, cut_ptr)) {
+            rc = STATUS_OUT_OF_BOUNDS;
+            break;
+        }
+
+        if(first_part) {
+            first_part->start = source->start;
+            first_part->end = cut_ptr;
+        }
+
+        if(second_part) {
+            second_part->start = cut_ptr;
+            second_part->end = source->end;
+        }
+    } while(0);
+
+    return rc;
+}
+
+status_t slice_split_at_offset(slice_p source, uint32_t offset, slice_p first_part, slice_p second_part)
+{
+    status_t rc = STATUS_OK;
+
+    do {
+        if(!source) {
+            rc = STATUS_NULL_PTR;
+            break;
+        }
+
+        if(!slice_contains_offset(source, offset)) {
+            rc = STATUS_OUT_OF_BOUNDS;
+            break;
+        }
+
+        rc = slice_split_at_ptr(source, source->start + offset, first_part, second_part);
+    } while(0);
+
+    return rc;
+}
+
+
+
+status_t slice_truncate_to_ptr(slice_p slice, uint8_t *ptr)
+{
+    status_t rc = STATUS_OK;
+
+    do {
+        if(!slice || !ptr) {
+            rc = STATUS_NULL_PTR;
+            break;
+        }
+
+        if(!slice_contains_ptr(slice, ptr)) {
+            rc = STATUS_OUT_OF_BOUNDS;
+            break;
+        }
+
+        slice->end = ptr;
+    } while(0);
+
+    return rc;
+}
+
+
+status_t slice_truncate_to_slice_end(slice_p slice, slice_p end_slice)
+{
+    status_t rc = STATUS_OK;
+
+    if(slice && end_slice) {
+        if(slice_contains_ptr(slice, end_slice->end)) {
+            slice->end = end_slice->end;
+        } else {
+            rc = STATUS_OUT_OF_BOUNDS;
+        }
+    } else {
+        rc = STATUS_NULL_PTR;
+    }
+
+    return rc;
+}
+
+
 status_t slice_to_string(slice_p slice, char *result, uint32_t result_size, bool byte_swap)
 {
     status_t rc = STATUS_OK;
@@ -67,28 +164,30 @@ status_t slice_to_string(slice_p slice, char *result, uint32_t result_size, bool
     do {
         if(!slice) {
             warn("Slice pointer must not be NULL!");
-            rc =  STATUS_ERR_NULL_PTR;
+            rc =  STATUS_NULL_PTR;
+            break;
+        }
+
+        if(!result) {
+            warn("Result pointer must not be NULL!");
+            rc =  STATUS_NULL_PTR;
             break;
         }
 
         slice_length = slice_get_len(slice);
 
-        if(!result) {
-            warn("Result pointer must not be NULL!");
-            rc =  STATUS_ERR_NULL_PTR;
+        /* if the raw data is byteswapped, we must have an even number of bytes. */
+        if(byte_swap && (slice_length & 0x01)) {
+            warn("Byteswapped string data must be even in length!");
+            rc = STATUS_BAD_INPUT;
             break;
         }
 
         str_length_required += slice_length + 1; /* +1 for the nul terminator */
 
-        /* if we are word swapping we need to have an even number of bytes */
-        if(byte_swap && (slice_length & 0x01)) {
-            str_length_required += 1;
-        }
-
         if(str_length_required > result_size) {
             warn("Slice contains more data than can fit in the string buffer!");
-            rc = STATUS_ERR_OUT_OF_BOUNDS;
+            rc = STATUS_OUT_OF_BOUNDS;
             break;
         }
 
@@ -123,7 +222,7 @@ status_t string_to_slice(const char *source, slice_p dest, bool byte_swap)
     do {
         if(!source) {
             warn("Source pointer must not be NULL!");
-            rc =  STATUS_ERR_NULL_PTR;
+            rc =  STATUS_NULL_PTR;
             break;
         }
 
@@ -131,7 +230,7 @@ status_t string_to_slice(const char *source, slice_p dest, bool byte_swap)
 
         if(!dest) {
             warn("Slice pointer must not be NULL!");
-            rc =  STATUS_ERR_NULL_PTR;
+            rc =  STATUS_NULL_PTR;
             break;
         }
 
@@ -139,14 +238,14 @@ status_t string_to_slice(const char *source, slice_p dest, bool byte_swap)
 
         slice_length_required = str_length;
 
-        /* if we are word swapping we need to have an even number of bytes */
+        /* if we are byte swapping we need to have an even number of bytes */
         if(byte_swap && (slice_length_required & 0x01)) {
             slice_length_required += 1;
         }
 
         if(slice_length_required > slice_get_len(dest)) {
             warn("Insufficient space in the destination slice!");
-            rc = STATUS_ERR_RESOURCE;
+            rc = STATUS_NO_RESOURCE;
             break;
         }
 
@@ -167,7 +266,7 @@ status_t string_to_slice(const char *source, slice_p dest, bool byte_swap)
             }
         }
 
-        dest->end = dest->start + slice_length_required;
+        rc = slice_truncate_to_offset(dest, slice_length_required);
     } while(0);
 
     return rc;
@@ -185,22 +284,22 @@ status_t slice_from_slice(slice_p parent, slice_p new_slice, uint8_t *start, uin
 
     if(!parent) {
         warn("Parent pointer cannot be NULL!");
-        return STATUS_ERR_NULL_PTR;
+        return STATUS_NULL_PTR;
     }
 
     if(!new_slice) {
         warn("New slice pointer cannot be NULL!");
-        return STATUS_ERR_NULL_PTR;
+        return STATUS_NULL_PTR;
     }
 
     if(!start) {
         warn("Start pointer cannot be NULL!");
-        return STATUS_ERR_NULL_PTR;
+        return STATUS_NULL_PTR;
     }
 
     if(!end) {
         warn("End pointer cannot be NULL!");
-        return STATUS_ERR_NULL_PTR;
+        return STATUS_NULL_PTR;
     }
 
     parent_start = (intptr_t)(parent->start);
@@ -210,17 +309,17 @@ status_t slice_from_slice(slice_p parent, slice_p new_slice, uint8_t *start, uin
 
     if(parent_start > new_slice_start || new_slice_start > parent_end) {
         warn("Start must be inside the parent slice bounds!");
-        return STATUS_ERR_OUT_OF_BOUNDS;
+        return STATUS_OUT_OF_BOUNDS;
     }
 
     if(parent_start > new_slice_end || new_slice_end > parent_end) {
         warn("End must be inside the parent slice bounds!");
-        return STATUS_ERR_OUT_OF_BOUNDS;
+        return STATUS_OUT_OF_BOUNDS;
     }
 
     if(new_slice_start > new_slice_end) {
         warn("Start must be a lower address than end!");
-        return STATUS_ERR_OUT_OF_BOUNDS;
+        return STATUS_OUT_OF_BOUNDS;
     }
 
     new_slice->start = start;
@@ -230,50 +329,149 @@ status_t slice_from_slice(slice_p parent, slice_p new_slice, uint8_t *start, uin
 }
 
 
-bool slice_get_u16_le_at_ptr(slice_p slice, uint8_t *ptr, uint16_t *val)
+
+status_t slice_split_middle_at_offsets(slice_p slice, uint32_t start_offset, uint32_t end_offset, slice_p first, slice_p second, slice_p third)
 {
-    if(slice && ptr && val && slice_contains_ptr(slice, ptr) && slice_get_len_from_ptr(slice, ptr) >= sizeof(*val)) {
-        *val = 0;
+    status_t rc = STATUS_OK;
 
-        *val |= (uint16_t)*(ptr);
-        *val |= ((uint16_t)(*(ptr + 1)) << 8);
+    if(slice && (first || second || third)) {
+        if(slice_contains_offset(slice, start_offset) && slice_contains_offset(slice, end_offset)) {
+            uint8_t *first_cut = slice->start + start_offset;
+            uint8_t *second_cut = slice->start + end_offset;
 
-        return true;
+            if(first) {
+                first->start = slice->start;
+                first->end = first_cut;
+            }
+
+            if(second) {
+                second->start = first_cut;
+                second->end = second_cut;
+            }
+
+            if(third) {
+                third->start = second_cut;
+                third->end = slice->end;
+            }
+        } else {
+            rc = STATUS_OUT_OF_BOUNDS;
+        }
+    } else {
+        rc = STATUS_NULL_PTR;
     }
 
-    return false;
+    return rc;
 }
 
-bool slice_set_u16_le_at_ptr(slice_p slice, uint8_t *ptr, uint16_t val)
-{
-    if(slice && ptr && val && slice_contains_ptr(slice, ptr) && slice_get_len_from_ptr(slice, ptr) >= sizeof(val)) {
-        *ptr  = (uint8_t)(val & 0xFF);
-        *(ptr + 1) = (uint8_t)((val >> 8) & 0xFF);
 
-        return true;
+status_t slice_get_u8_ptr(slice_p slice, uint8_t *ptr, uint8_t *val)
+{
+    if(!slice || !ptr || !val) {
+        return STATUS_NULL_PTR;
     }
 
-    return false;
-}
-
-
-bool slice_get_u32_le_at_ptr(slice_p slice, uint8_t *ptr, uint32_t *val)
-{
-    if(slice && ptr && val && slice_contains_ptr(slice, ptr) && slice_get_len_from_ptr(slice, ptr) >= sizeof(*val)) {
-        *val = 0;
-
-        *val |= (uint32_t)*(ptr);
-        *val |= ((uint32_t)(*(ptr + 1)) << 8);
-        *val |= ((uint32_t)(*(ptr + 2)) << 16);
-        *val |= ((uint32_t)(*(ptr + 3)) << 24);
-
-        return true;
+    if(!slice_contains_ptr(slice, ptr)) {
+        return STATUS_OUT_OF_BOUNDS;
     }
 
-    return false;
+    *val = *ptr;
+
+    return STATUS_OK;
 }
 
-bool slice_set_u32_le_at_ptr(slice_p slice, uint8_t *ptr, uint32_t val)
+status_t slice_set_u8_ptr(slice_p slice, uint8_t *ptr, uint8_t val)
+{
+    if(!slice || !ptr) {
+        return STATUS_NULL_PTR;
+    }
+
+    if(!slice_contains_ptr(slice, ptr)) {
+        return STATUS_OUT_OF_BOUNDS;
+    }
+
+    *ptr = val;
+
+    return STATUS_OK;
+}
+
+status_t slice_get_u8_offset(slice_p slice, uint32_t offset, uint8_t *val)
+{
+    if(!slice) {
+        return STATUS_NULL_PTR;
+    }
+
+    return slice_get_u8_ptr(slice, slice->start + offset, val);
+}
+
+status_t slice_set_u8_offset(slice_p slice, uint32_t offset, uint8_t val)
+{
+    if(!slice) {
+        return STATUS_NULL_PTR;
+    }
+
+    return slice_set_u8_ptr(slice, slice->start + offset, val);
+}
+
+
+
+status_t slice_get_u16_le_at_ptr(slice_p slice, uint8_t *ptr, uint16_t *val)
+{
+    if(!slice || !ptr || !val) {
+        return STATUS_NULL_PTR;
+    }
+
+    if(!slice_contains_ptr(slice, ptr) || (slice_get_len_from_ptr(slice, ptr) < sizeof(*val))) {
+        return STATUS_OUT_OF_BOUNDS;
+    }
+
+    *val = 0;
+
+    *val |= (uint16_t)*(ptr);
+    *val |= ((uint16_t)(*(ptr + 1)) << 8);
+
+    return STATUS_OK;
+}
+
+
+status_t slice_set_u16_le_at_ptr(slice_p slice, uint8_t *ptr, uint16_t val)
+{
+    if(!slice || !ptr) {
+        return STATUS_NULL_PTR;
+    }
+
+    if(!slice_contains_ptr(slice, ptr) || (slice_get_len_from_ptr(slice, ptr) < sizeof(val))) {
+        return STATUS_OUT_OF_BOUNDS;
+    }
+
+    *ptr  = (uint8_t)(val & 0xFF);
+    *(ptr + 1) = (uint8_t)((val >> 8) & 0xFF);
+
+    return STATUS_OK;
+}
+
+
+status_t slice_get_u32_le_at_ptr(slice_p slice, uint8_t *ptr, uint32_t *val)
+{
+    if(!slice || !ptr || !val) {
+        return STATUS_NULL_PTR;
+    }
+
+    if(!slice_contains_ptr(slice, ptr) || (slice_get_len_from_ptr(slice, ptr) < sizeof(*val))) {
+        return STATUS_OUT_OF_BOUNDS;
+    }
+
+    *val = 0;
+
+    *val |= (uint16_t)*(ptr);
+    *val |= ((uint16_t)(*(ptr + 1)) << 8);
+    *val |= ((uint32_t)(*(ptr + 2)) << 16);
+    *val |= ((uint32_t)(*(ptr + 3)) << 24);
+
+    return STATUS_OK;
+}
+
+
+status_t slice_set_u32_le_at_ptr(slice_p slice, uint8_t *ptr, uint32_t val)
 {
     if(slice && ptr && val && slice_contains_ptr(slice, ptr) && slice_get_len_from_ptr(slice, ptr) >= sizeof(val)) {
         *ptr  = (uint8_t)(val & 0xFF);
@@ -324,4 +522,62 @@ bool slice_set_u64_le_at_ptr(slice_p slice, uint8_t *ptr, uint64_t val)
     }
 
     return false;
+}
+
+
+
+status_t slice_get_f32_le_at_ptr(slice_p slice, uint8_t *ptr, float *val)
+{
+    status_t rc = STATUS_OK;
+    uint32_t u_val = 0;
+
+    if(!val) {
+        return STATUS_NULL_PTR;
+    }
+
+    rc = slice_get_u32_le_at_ptr(slice, ptr, &u_val);
+
+    if(rc == STATUS_OK) {
+        memcpy(val, &u_val, sizeof(*val));
+    }
+
+    return rc;
+}
+
+status_t slice_set_f32_le_at_ptr(slice_p slice, uint8_t *ptr, float val)
+{
+    status_t rc = STATUS_OK;
+    uint32_t u_val = 0;
+
+    memcpy(&u_val, &val, sizeof(u_val));
+
+    return slice_set_u32_le_at_ptr(slice, ptr, u_val);
+}
+
+
+
+status_t slice_get_f64_le_at_ptr(slice_p slice, uint8_t *ptr, double *val)
+{
+    status_t rc = STATUS_OK;
+    uint64_t u_val = 0;
+
+    if(!val) {
+        return STATUS_NULL_PTR;
+    }
+
+    if(slice_get_u64_le_at_ptr(slice, ptr, &u_val)) {
+        memcpy(val, &u_val, sizeof(*val));
+        return true;
+    }
+
+    return false;
+}
+
+status_t slice_set_f64_le_at_ptr(slice_p slice, uint8_t *ptr, double val)
+{
+    uint64_t u_val = 0;
+
+    memcpy(&u_val, &val, sizeof(u_val));
+
+    return slice_set_u64_le_at_ptr(slice, ptr, u_val);
 }

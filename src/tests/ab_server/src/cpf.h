@@ -39,4 +39,4 @@
 #include "utils/status.h"
 
 extern status_t cpf_dispatch_connected_request(slice_p request, slice_p response, plc_connection_p connection);
-extern status_t cpf_dispatch_unconnected_request(slice_p request, slice_p response, plc_connection_p connections);
+extern status_t cpf_dispatch_unconnected_request(slice_p request, slice_p response, plc_connection_p connection);

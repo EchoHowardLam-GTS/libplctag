@@ -38,19 +38,5 @@
 #include "utils/status.h"
 #include "utils/tcp_server.h"
 
-/* EIP header size is 24 bytes. */
-const uint32_t EIP_HEADER_SIZE = (24);
-
-
-typedef struct {
-    uint16_t command;
-    uint16_t length;
-    uint32_t session_handle;
-    uint32_t status;
-    uint64_t sender_context;
-    uint32_t options;
-} eip_pdu_header_t;
-
-typedef eip_pdu_header_t *eip_pdu_header_p;
 
 extern status_t eip_dispatch_request(slice_p request, slice_p response, tcp_connection_p connection_arg);

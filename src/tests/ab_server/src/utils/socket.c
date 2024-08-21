@@ -47,10 +47,11 @@
     #include <unistd.h>
 #endif
 
+#include <inttypes.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "compat.h"
+
 #include "debug.h"
 #include "slice.h"
 #include "socket.h"
@@ -59,20 +60,163 @@
 
 /* lengths for socket read and write. */
 #ifdef IS_MSVC
-    typedef int sock_io_len_t;
 #else
     typedef size_t sock_io_len_t;
     typedef struct timeval TIMEVAL;
 #endif
 
 
+
 #define LISTEN_QUEUE (10)
 
 #ifdef IS_WINDOWS
+    typedef int sock_io_len_t;
+
     #define SOCK_BUF_LEN_TYPE int
+
+    #define SOCKET_LIB_INIT                                         \
+        do {                                                        \
+            /* Windows needs special initialization. */             \
+            static WSADATA winsock_data;                            \
+            sock_rc = WSAStartup(MAKEWORD(2, 2), &winsock_data);    \
+            if(sock_rc != NO_ERROR) {                               \
+                info("WSAStartup failed with error: %d!", sock_rc); \
+                return STATUS_INTERNAL_FAILURE;                     \
+            }                                                       \
+        } while(0)
+
+    #define SOCKET_LIB_SHUTDOWN do { if(WSACleanup() != NO_ERROR) { return PLCTAG_ERR_WINSOCK; } } while(0)
+
+    #define IS_ERR_RESULT(s) ((s) == INVALID_SOCKET)
+
+    #define LAST_SOCK_ERR (WSAGetLastError())
+
 #else
+    typedef size_t sock_io_len_t;
+    typedef struct timeval TIMEVAL;
+
     #define SOCK_BUF_LEN_TYPE size_t
+
+    #define SOCKET_LIB_INIT do { } while(0)
+
+    #define SOCKET_LIB_SHUTDOWN do { } while(0)
+
+    #define IS_ERR_RESULT(s) ((s) < 0)
+
+    #define LAST_SOCK_ERR (errno)
+
+    #include <sys/select.h>
+    #include <sys/socket.h>
+    #include <unistd.h>
+    #include <stdio.h>
+
 #endif
+
+
+typedef enum {
+    SOCKET_WAIT_FOR_READ_READY,
+    SOCKET_WAIT_FOR_WRITE_READY,
+} socket_wait_type_t;
+
+static status_t get_sock_error(void);
+
+
+status_t socket_event_wait(SOCKET sock, socket_event_t events_wanted, socket_event_t *events_found, uint32_t timeout_ms)
+{
+    status_t rc = STATUS_OK;
+
+    do {
+        fd_set read_fds;
+        fd_set *read_fds_ptr = NULL;
+        fd_set write_fds;
+        fd_set *write_fds_ptr = NULL;
+        struct timeval timeout;
+        int result = 0;
+        int option = 0;
+        bool read_event = (events_wanted & SOCKET_EVENT_READ) ? true : false;
+        bool write_event = (events_wanted & SOCKET_EVENT_WRITE) ? true : false;
+        bool accept_event = (events_wanted & SOCKET_EVENT_ACCEPT) ? true : false;
+
+        /* what kind of socket is this? */
+        result = getsockopt(sock, SOL_SOCKET, SO_ACCEPTCONN, &option, sizeof(option));
+        if(result == 0) {
+            if(option != 0) {
+                /* this is a listening socket */
+                if(read_event || write_event) {
+                    warn("This function was called asking for read/write events on a listening socket!");
+                    rc = STATUS_BAD_INPUT;
+                    break;
+                }
+            } else {
+                /* this is a normal socket */
+                if(accept_event) {
+                    warn("This function was called asking for accept events on a non-listening socket!");
+                    rc = STATUS_BAD_INPUT;
+                    break;
+                }
+            }
+        } else {
+            /* getsockopt() returned an error! */
+            rc = get_sock_error();
+            break;
+        }
+
+        *events_found = SOCKET_EVENT_NONE;
+
+        /* always add the socket to the read events so that we can catch socket closures. */
+        if(read_event || accept_event) {
+            FD_ZERO(&read_fds);
+            FD_SET(sock, &read_fds);
+            read_fds_ptr = &read_fds;
+        }
+
+        if(write_event) {
+            FD_ZERO(&write_fds);
+            FD_SET(sock, &write_fds);
+            write_fds_ptr = &write_fds;
+        }
+
+        timeout.tv_sec = (timeout_ms / 1000);
+        timeout.tv_usec = (timeout_ms % 1000) * 1000;
+
+        result = select(sock + 1, read_fds_ptr, write_fds_ptr, NULL, &timeout);
+
+        if(result < 0) {
+            warn( "select() returned status %d!", result);
+            rc = get_sock_error();
+            break;
+        }
+
+        if(result == 0) {
+            info("Timed out waiting for an event.");
+            *events_found = SOCKET_EVENT_TIMEOUT;
+            break;
+        }
+
+        /* so result was > 0 */
+        if(read_fds_ptr && FD_ISSET(sock, read_fds_ptr)) {
+            if(accept_event) {
+                *events_found |= SOCKET_EVENT_ACCEPT;
+            } else if(read_event) {
+                *events_found |= SOCKET_EVENT_READ;
+            } else {
+                warn("Socket was ready for reading/accepting but we did not ask for that event!");
+                rc = STATUS_INTERNAL_FAILURE;
+            }
+        }
+
+        if(write_fds_ptr && FD_ISSET(sock, write_fds_ptr)) {
+            if(write_event) {
+                *events_found |= SOCKET_EVENT_WRITE;
+            } else {
+                warn("Socket was ready for writing but we did not ask for that event!");
+                rc = STATUS_INTERNAL_FAILURE;
+            }
+        }
+    } while(0);
+
+    return rc;
+}
 
 
 
@@ -85,18 +229,10 @@ status_t socket_open(const char *host, const char *port, bool is_server, SOCKET 
     int sock_opt = 0;
     int sock_rc;
 
-    do {
-#ifdef IS_WINDOWS
-        /* Windows needs special initialization. */
-        static WSADATA winsock_data;
-        sock_rc = WSAStartup(MAKEWORD(2, 2), &winsock_data);
 
-        if (sock_rc != NO_ERROR) {
-            info("WSAStartup failed with error: %d!", sock_rc);
-            rc = STATUS_ERR_OP_FAILED;
-            break;
-        }
-#endif
+
+    do {
+        SOCKET_LIB_INIT;
 
         /*
         * Set up the hints for the type of socket that we want.
@@ -137,7 +273,7 @@ status_t socket_open(const char *host, const char *port, bool is_server, SOCKET 
         sock_rc = getaddrinfo(host, port, &addr_hints, &addr_info);
         if (sock_rc != 0) {
             warn("getaddrinfo() failed: %s!", gai_strerror(sock_rc));
-            rc = STATUS_ERR_OP_FAILED;
+            rc = STATUS_INTERNAL_FAILURE;
             break;
         }
 
@@ -146,7 +282,7 @@ status_t socket_open(const char *host, const char *port, bool is_server, SOCKET 
 
         if (sock < 0) {
             warn("socket() failed: %s!", gai_strerror(sock));
-            rc = STATUS_ERR_OP_FAILED;
+            rc = STATUS_INTERNAL_FAILURE;
             break;
         }
 
@@ -157,14 +293,14 @@ status_t socket_open(const char *host, const char *port, bool is_server, SOCKET 
             sock_rc = bind(sock, addr_info->ai_addr, (socklen_t)(unsigned int)addr_info->ai_addrlen);
             if (sock_rc < 0)	{
                 warn("Unable to bind() socket: %s!", gai_strerror(sock_rc));
-                rc = STATUS_ERR_OP_FAILED;
+                rc = STATUS_INTERNAL_FAILURE;
                 break;
             }
 
             sock_rc = listen(sock, LISTEN_QUEUE);
             if(sock_rc < 0) {
                 warn("Unable to call listen() on socket: %s!", gai_strerror(sock_rc));
-                rc = STATUS_ERR_OP_FAILED;
+                rc = STATUS_INTERNAL_FAILURE;
                 break;
             }
 
@@ -174,7 +310,7 @@ status_t socket_open(const char *host, const char *port, bool is_server, SOCKET 
             if(sock_rc) {
                 socket_close(sock);
                 warn("Setting SO_REUSEADDR on socket failed: %s!", gai_strerror(sock_rc));
-                rc = STATUS_ERR_OP_FAILED;
+                rc = STATUS_INTERNAL_FAILURE;
                 break;
             }
         } else {
@@ -187,7 +323,7 @@ status_t socket_open(const char *host, const char *port, bool is_server, SOCKET 
             if(sock_rc) {
                 socket_close(sock);
                 warn("Setting SO_REUSEADDR on socket failed: %s!", gai_strerror(sock_rc));
-                rc = STATUS_ERR_OP_FAILED;
+                rc = STATUS_INTERNAL_FAILURE;
                 break;
             }
 #endif
@@ -199,7 +335,7 @@ status_t socket_open(const char *host, const char *port, bool is_server, SOCKET 
             if(sock_rc) {
                 socket_close(sock);
                 warn("Setting SO_RCVTIMEO on socket failed: %s!", gai_strerror(sock_rc));
-                rc = STATUS_ERR_OP_FAILED;
+                rc = STATUS_INTERNAL_FAILURE;
                 break;
             }
 
@@ -207,7 +343,7 @@ status_t socket_open(const char *host, const char *port, bool is_server, SOCKET 
             if(sock_rc) {
                 socket_close(sock);
                 warn("Setting SO_SNDTIMEO on socket failed: %s!", gai_strerror(sock_rc));
-                rc = STATUS_ERR_OP_FAILED;
+                rc = STATUS_INTERNAL_FAILURE;
                 break;
             }
 
@@ -219,7 +355,7 @@ status_t socket_open(const char *host, const char *port, bool is_server, SOCKET 
             if(sock_rc) {
                 socket_close(sock);
                 warn("Setting SO_LINGER on socket failed: %s!", gai_strerror(sock_rc));
-                rc = STATUS_ERR_OP_FAILED;
+                rc = STATUS_INTERNAL_FAILURE;
                 break;
             }
         }
@@ -258,209 +394,84 @@ status_t socket_accept(SOCKET listen_sock, SOCKET *client_fd, uint32_t timeout_m
 
         /* The listen_socket is non-blocking. */
         accept_rc = (int)accept(listen_sock, NULL, NULL);
-        if(accept_rc < 0) {
+        if(accept_rc > 0) {
+            detail("Accepted new client connection.");
+            *client_fd = accept_rc;
+            rc = STATUS_OK;
+            break;
+        } else if(accept_rc < 0) {
             if(errno == EAGAIN || errno == EWOULDBLOCK) {
                 if(timeout_ms > 0) {
                     detail("Immediate accept attempt did not succeed, now wait for select().");
                 } else {
-                    detail("Read resulted in no data.");
+                    detail("Accept resulted in no data.");
                 }
 
                 accept_rc = 0;
             } else {
                 warn("Socket accept error: rc=%d, errno=%d", rc, errno);
-                rc = STATUS_ERR_OP_FAILED;
+                rc = STATUS_INTERNAL_FAILURE;
                 break;
             }
-        } else if(accept_rc > 0) {
-            *client_fd = accept_rc;
-            rc = STATUS_OK;
-            break;
         }
 
         /* only wait if we have a timeout and no error. */
         if(accept_rc == 0 && timeout_ms > 0) {
-            fd_set accept_set;
-            struct timeval tv;
-            int select_rc = 0;
+            rc = wait_for_socket_ready(listen_sock, SOCKET_WAIT_FOR_READ_READY, timeout_ms);
 
-            tv.tv_sec = (time_t)(timeout_ms / 1000);
-            tv.tv_usec = (suseconds_t)(timeout_ms % 1000) * (suseconds_t)(1000);
+            if(rc == STATUS_OK) {
+                accept_rc = accept(listen_sock, NULL, NULL);
 
-            FD_ZERO(&accept_set);
-
-            FD_SET(listen_sock, &accept_set);
-
-            select_rc = select(listen_sock+1, &accept_set, NULL, NULL, &tv);
-            if(select_rc > 0) {
-                if(FD_ISSET(listen_sock, &accept_set)) {
-                    detail("Client connected.");
-                    accept_rc = accept(listen_sock, NULL, NULL);
-
-                    if(accept_rc > 0) {
-                        *client_fd = accept_rc;
-                        rc = STATUS_OK;
-                        break;
-                    } else {
-                        warn("Error accepting new connection!");
-                        rc = STATUS_ERR_OP_FAILED;
-                    }
+                if(accept_rc > 0) {
+                    *client_fd = accept_rc;
+                    rc = STATUS_OK;
+                    break;
                 } else {
-                    warn( "select() returned but the listen socket is not ready!");
-                    rc = STATUS_ERR_OP_FAILED;
-                }
-            } else if(select_rc == 0) {
-                detail("Socket accept timed out.");
-                rc = STATUS_ERR_TIMEOUT;
-            } else {
-                warn( "select() returned status %d!", select_rc);
-
-                switch(errno) {
-                    case EBADF: /* bad file descriptor */
-                        warn( "Bad file descriptor used in select()!");
-                        rc = STATUS_ERR_RESOURCE;
-                        break;
-
-                    case EINTR: /* signal was caught, this should not happen! */
-                        warn( "A signal was caught in select() and this should not happen!");
-                        rc = STATUS_ERR_OP_FAILED;
-                        break;
-
-                    case EINVAL: /* number of FDs was negative or exceeded the max allowed. */
-                        warn( "The number of fds passed to select() was negative or exceeded the allowed limit or the timeout is invalid!");
-                        rc = STATUS_ERR_PARAM;
-                        break;
-
-                    case ENOMEM: /* No mem for internal tables. */
-                        warn( "Insufficient memory for select() to run!");
-                        rc = STATUS_ERR_RESOURCE;
-                        break;
-
-                    default:
-                        warn( "Unexpected listen_socket err %d!", errno);
-                        rc = STATUS_ERR_OP_FAILED;
-                        break;
-                }
-            }
-
-            /* try to accept again. */
-            accept_rc = (int)accept(listen_sock, NULL, NULL);
-            if(accept_rc < 0) {
-                if(errno == EAGAIN || errno == EWOULDBLOCK) {
-                    detail("No data accept.");
-                    accept_rc = 0;
-                } else {
-                    warn("Socket accept error: accept_rc=%d, errno=%d", accept_rc, errno);
-                    rc = STATUS_ERR_OP_FAILED;
+                    warn("Error accepting new connection!");
+                    rc = STATUS_INTERNAL_FAILURE;
                 }
             }
         }
+
+        if(accept_rc > 0) {
+            *client_fd = accept_rc;
+            rc = STATUS_OK;
+        }
     } while(0);
 
-    detail("Done: result %d.", rc);
+    detail("Done: result %s.", status_to_str(rc));
 
     return rc;
 }
 
 
-#ifdef IS_WINDOWS
 
-#else
-
-status_t socket_read(int sock, slice_p buf, uint32_t timeout_ms)
+status_t socket_read(int sock, slice_p read_buffer, uint32_t timeout_ms)
 {
     status_t rc = STATUS_OK;
-    int read_status = 0;
+    int read_amt = 0;
+
+    info("Starting.");
 
     do {
-        /*
-        * Try to read immediately.   If we get data, we skip any other
-        * delays.   If we do not, then see if we have a timeout.
-        */
+        rc = wait_for_socket_read_ready(sock, timeout_ms);
 
-        /* The socket is non-blocking. */
-        read_status = (int)read(sock, buf->start, (size_t)slice_get_len(buf));
-        if(read_status < 0) {
-            if(errno == EAGAIN || errno == EWOULDBLOCK) {
-                if(timeout_ms > 0) {
-                    detail("Immediate read attempt did not succeed, now wait for select().");
-                } else {
-                    detail("Read resulted in no data.");
-                }
+        if(rc == STATUS_OK) {
+            rc = STATUS_PARTIAL;
 
-                read_status = 0;
-            } else {
-                warn("Socket read error: rc=%d, errno=%d", rc, errno);
-                rc = STATUS_ERR_OP_FAILED;
+            read_amt = (int)read(sock,read_buffer->start,(size_t)slice_get_len(read_buffer));
+
+            if(read_amt > 0) {
+                /* got data. */
+                slice_truncate_to_offset(read_buffer, read_amt);
+                rc = STATUS_OK;
                 break;
-            }
-        }
-
-        /* only wait if we have a timeout and no error and no data. */
-        if(read_status == 0 && timeout_ms > 0) {
-            fd_set read_set;
-            struct timeval tv;
-            int select_rc = 0;
-
-            tv.tv_sec = (time_t)(timeout_ms / 1000);
-            tv.tv_usec = (suseconds_t)(timeout_ms % 1000) * (suseconds_t)(1000);
-
-            FD_ZERO(&read_set);
-
-            FD_SET(sock, &read_set);
-
-            select_rc = select(sock+1, &read_set, NULL, NULL, &tv);
-            if(select_rc == 1) {
-                if(FD_ISSET(sock, &read_set)) {
-                    detail("Socket can read data.");
-                } else {
-                    warn( "select() returned but socket is not ready to read data!");
-                    rc = STATUS_ERR_OP_FAILED;
-                }
-            } else if(select_rc == 0) {
-                detail("Socket read timed out.");
-                rc = STATUS_ERR_TIMEOUT;
+            } else if(read_amt < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
+                warn("Socket read error: read_amt=%d, errno=%d", read_amt, errno);
+                rc = STATUS_INTERNAL_FAILURE;
             } else {
-                warn( "select() returned status %d!", select_rc);
-
-                switch(errno) {
-                    case EBADF: /* bad file descriptor */
-                        warn( "Bad file descriptor used in select()!");
-                        rc = STATUS_ERR_RESOURCE;
-                        break;
-
-                    case EINTR: /* signal was caught, this should not happen! */
-                        warn( "A signal was caught in select() and this should not happen!");
-                        rc = STATUS_ERR_OP_FAILED;
-                        break;
-
-                    case EINVAL: /* number of FDs was negative or exceeded the max allowed. */
-                        warn( "The number of fds passed to select() was negative or exceeded the allowed limit or the timeout is invalid!");
-                        rc = STATUS_ERR_PARAM;
-                        break;
-
-                    case ENOMEM: /* No mem for internal tables. */
-                        warn( "Insufficient memory for select() to run!");
-                        rc = STATUS_ERR_RESOURCE;
-                        break;
-
-                    default:
-                        warn( "Unexpected socket err %d!", errno);
-                        rc = STATUS_ERR_OP_FAILED;
-                        break;
-                }
-            }
-
-            /* try to read again. */
-            read_status = (int)read(sock,buf->start,(size_t)slice_get_len(buf));
-            if(read_status < 0) {
-                if(errno == EAGAIN || errno == EWOULDBLOCK) {
-                    detail("No data read.");
-                    read_status = 0;
-                } else {
-                    warn("Socket read error: read_status=%d, errno=%d", read_status, errno);
-                    rc = STATUS_ERR_OP_FAILED;
-                }
+                info("No data read.");
+                rc = STATUS_PARTIAL;
             }
         }
     } while(0);
@@ -470,121 +481,94 @@ status_t socket_read(int sock, slice_p buf, uint32_t timeout_ms)
     return rc;
 }
 
-#endif
 
-
-#ifdef IS_WINDOWS
-
-#else
 
 /* this blocks until all the data is written or there is an error. */
-status_t socket_write(int sock, slice_p data, uint32_t timeout_ms)
+status_t socket_write(int sock, slice_p data)
 {
-    status_t rc = STATUS_OK;
-    int write_status = 0;
+    status_t rc = STATUS_PARTIAL;
+    int write_amt = 0;
 
     info("socket_write(): writing data:");
     debug_dump_buf(DEBUG_INFO, data->start, data->end);
 
     do {
-        /*
-        * Try to write immediately.   If we write data, we skip any other
-        * delays.   If we do not, then see if we have a timeout.
-        */
+        slice_t tmp_data = {0};
 
-        /* The socket is non-blocking. */
-        write_status = (int)write(sock, data->start, (size_t)slice_get_len(data));
-        if(write_status < 0) {
-            if(errno == EAGAIN || errno == EWOULDBLOCK) {
-                if(timeout_ms > 0) {
-                    detail("Immediate write attempt did not succeed, now wait for select().");
-                } else {
-                    detail("Write wrote no data.");
-                }
-
-                write_status = 0;
-            } else {
+        write_amt = (int)write(sock, data->start, (size_t)slice_get_len(data));
+        if(write_amt < 0) {
+            if(errno != EAGAIN || errno != EWOULDBLOCK) {
                 warn("Socket write error: rc=%d, errno=%d", rc, errno);
-                rc = STATUS_ERR_OP_FAILED;
+                rc = STATUS_INTERNAL_FAILURE;
+                break;
+            } else {
+                /* we did not write any data or we were told we would block. */
+                rc = STATUS_WOULD_BLOCK;
                 break;
             }
         }
 
-        /* only wait if we have a timeout and no error and no data. */
-        if(write_status == 0 && timeout_ms > 0) {
-            fd_set write_set;
-            struct timeval tv;
-            int select_rc = 0;
+        if(write_amt == 0) {
+            info("No data written, but no errors.");
+            rc = STATUS_PARTIAL;
+            break;
+        }
 
-            tv.tv_sec = (time_t)(timeout_ms / 1000);
-            tv.tv_usec = (suseconds_t)(timeout_ms % 1000) * (suseconds_t)(1000);
+        /* we wrote something. */
+        info("Wrote %d bytes out of %"PRIu32" of data.", write_amt, slice_get_len(data));
 
-            FD_ZERO(&write_set);
+        /* trim off the amount we wrote. */
+        rc = slice_split_at_offset(data, (uint32_t)write_amt, NULL, &tmp_data);
+        if(rc != STATUS_OK) {
+            warn("Error %s trying to split data slice!", status_to_str(rc));
+            break;
+        }
 
-            FD_SET(sock, &write_set);
+        *data = tmp_data;
 
-            select_rc = select(sock+1, NULL, &write_set, NULL, &tv);
-            if(select_rc == 1) {
-                if(FD_ISSET(sock, &write_set)) {
-                    detail("Socket can write data.");
-                } else {
-                    warn( "select() returned but socket is not ready to write data!");
-                    rc = STATUS_ERR_OP_FAILED;
-                    break;
-                }
-            } else if(select_rc == 0) {
-                detail("Socket write timed out.");
-                rc = STATUS_ERR_TIMEOUT;
-                break;
-            } else {
-                warn( "select() returned status %d!", select_rc);
-
-                switch(errno) {
-                    case EBADF: /* bad file descriptor */
-                        warn( "Bad file descriptor used in select()!");
-                        rc = STATUS_ERR_RESOURCE;
-                        break;
-
-                    case EINTR: /* signal was caught, this should not happen! */
-                        warn( "A signal was caught in select() and this should not happen!");
-                        rc = STATUS_ERR_OP_FAILED;
-                        break;
-
-                    case EINVAL: /* number of FDs was negative or exceeded the max allowed. */
-                        warn( "The number of fds passed to select() was negative or exceeded the allowed limit or the timeout is invalid!");
-                        rc = STATUS_ERR_PARAM;
-                        break;
-
-                    case ENOMEM: /* No mem for internal tables. */
-                        warn( "Insufficient memory for select() to run!");
-                        rc = STATUS_ERR_RESOURCE;
-                        break;
-
-                    default:
-                        warn( "Unexpected socket err %d!", errno);
-                        rc = STATUS_ERR_OP_FAILED;
-                        break;
-                }
-            }
-
-            /* try to write again. */
-            write_status = (int)write(sock, data->start, (size_t)slice_get_len(data));
-            if(write_status < 0) {
-                if(errno == EAGAIN || errno == EWOULDBLOCK) {
-                    detail("No data written.");
-                    write_status = 0;
-                } else {
-                    warn("Socket write error: write_status=%d, errno=%d", write_status, errno);
-                    rc = STATUS_ERR_OP_FAILED;
-                    break;
-                }
-            }
+        if(slice_get_len(&tmp_data) > 0) {
+            info("Did not write all the data.");
+            rc = STATUS_PARTIAL;
         }
     } while(0);
 
-    detail("Done: wrote %d bytes with result status %s.", write_status, status_to_str(rc));
+    detail("Done: wrote %d bytes with result status %s.", write_amt, status_to_str(rc));
 
     return rc;
 }
 
-#endif
+
+
+status_t get_sock_error(void)
+{
+    status_t rc = STATUS_OK;
+
+    switch(LAST_SOCK_ERR) {
+        case EBADF: /* bad file descriptor */
+            warn( "Bad file descriptor!");
+            rc = STATUS_NO_RESOURCE;
+            break;
+
+        case EINTR: /* signal was caught, this should not happen! */
+            warn( "A signal was caught in a socket operation and this should not happen!");
+            rc = STATUS_INTERNAL_FAILURE;
+            break;
+
+        case EINVAL: /* number of FDs was negative or exceeded the max allowed. */
+            warn( "The number of fds passed to select() was negative or exceeded the allowed limit or the timeout is invalid!");
+            rc = STATUS_BAD_INPUT;
+            break;
+
+        case ENOMEM: /* No mem for internal tables. */
+            warn( "Insufficient memory to perform the function!");
+            rc = STATUS_NO_RESOURCE;
+            break;
+
+        default:
+            warn( "Unexpected socket err %d!", errno);
+            rc = STATUS_INTERNAL_FAILURE;
+            break;
+    }
+
+    return rc;
+}
