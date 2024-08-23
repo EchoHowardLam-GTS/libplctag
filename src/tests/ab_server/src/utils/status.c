@@ -85,6 +85,9 @@ const char *status_to_str(status_t status)
         case STATUS_EXTERNAL_FAILURE: return "STATUS_EXTERNAL_FAILURE. A failure was reported outside the code."; break;
         case STATUS_EXTERNAL_FAILURE + STATUS_ERROR: return "STATUS_EXTERNAL_FAILURE_ERROR: A failure was reported outside the code."; break;
 
+        case STATUS_NOT_ALLOWED: return "STATUS_NOT_ALLOWED. Operation is not allowed."; break;
+        case STATUS_NOT_ALLOWED + STATUS_ERROR: return "STATUS_NOT_ALLOWED_ERROR: Operation not allowed."; break;
+
         default: return "Unknown status code!"; break;
     }
 }

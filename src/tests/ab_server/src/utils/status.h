@@ -56,6 +56,7 @@ typedef enum {
     STATUS_SETUP_FAILURE,
     STATUS_INTERNAL_FAILURE,
     STATUS_EXTERNAL_FAILURE,
+    STATUS_NOT_ALLOWED,
 
     /* makes any warning an error, gnerally not recoverable */
     STATUS_ERROR = 1000,
