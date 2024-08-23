@@ -113,14 +113,21 @@
 #endif
 
 
-typedef enum {
-    SOCKET_WAIT_FOR_READ_READY,
-    SOCKET_WAIT_FOR_WRITE_READY,
-} socket_wait_type_t;
-
 static status_t get_sock_error(void);
 
-
+/**
+ * @brief
+ *
+ * @param sock
+ * @param events_wanted
+ * @param events_found
+ * @param timeout_ms
+ * @return status_t
+ *      STATUS_OK - At least one of the requested events were found.
+ *      STATUS_TIMEOUT - select() timed out waiting for an event to happen.
+ *
+ *      STATUS_BAD_INPUT - Mismatch of args.  E.g. trying to get a write event on a listen socket.
+ */
 status_t socket_event_wait(SOCKET sock, socket_event_t events_wanted, socket_event_t *events_found, uint32_t timeout_ms)
 {
     status_t rc = STATUS_OK;
@@ -163,7 +170,6 @@ status_t socket_event_wait(SOCKET sock, socket_event_t events_wanted, socket_eve
 
         *events_found = SOCKET_EVENT_NONE;
 
-        /* always add the socket to the read events so that we can catch socket closures. */
         if(read_event || accept_event) {
             FD_ZERO(&read_fds);
             FD_SET(sock, &read_fds);
@@ -190,6 +196,7 @@ status_t socket_event_wait(SOCKET sock, socket_event_t events_wanted, socket_eve
         if(result == 0) {
             info("Timed out waiting for an event.");
             *events_found = SOCKET_EVENT_TIMEOUT;
+            rc = STATUS_TIMEOUT;
             break;
         }
 
@@ -228,8 +235,6 @@ status_t socket_open(const char *host, const char *port, bool is_server, SOCKET 
 	int sock;
     int sock_opt = 0;
     int sock_rc;
-
-
 
     do {
         SOCKET_LIB_INIT;
@@ -380,8 +385,18 @@ void socket_close(int sock)
     }
 }
 
-
-status_t socket_accept(SOCKET listen_sock, SOCKET *client_fd, uint32_t timeout_ms)
+/**
+ * @brief Accept a client connection.  Non-blocking.
+ *
+ * @param listen_sock
+ * @param client_fd
+ * @return status_t
+ *      STATUS_OK - when a client connection fd was received.
+ *      STATUS_PARTIAL - when accept would have blocked.
+ *
+ *      various errors - based on socket errors
+ */
+status_t socket_accept(SOCKET listen_sock, SOCKET *client_fd)
 {
     status_t rc = STATUS_OK;
     int accept_rc = 0;
@@ -399,43 +414,24 @@ status_t socket_accept(SOCKET listen_sock, SOCKET *client_fd, uint32_t timeout_m
             *client_fd = accept_rc;
             rc = STATUS_OK;
             break;
-        } else if(accept_rc < 0) {
-            if(errno == EAGAIN || errno == EWOULDBLOCK) {
-                if(timeout_ms > 0) {
-                    detail("Immediate accept attempt did not succeed, now wait for select().");
-                } else {
-                    detail("Accept resulted in no data.");
-                }
+        }
 
-                accept_rc = 0;
+        if(accept_rc < 0) {
+            if(errno == EAGAIN || errno == EWOULDBLOCK) {
+                detail("No client connection was ready.");
+                rc = STATUS_PARTIAL;
+                break;
             } else {
                 warn("Socket accept error: rc=%d, errno=%d", rc, errno);
-                rc = STATUS_INTERNAL_FAILURE;
+                rc = get_sock_error();
                 break;
             }
         }
 
-        /* only wait if we have a timeout and no error. */
-        if(accept_rc == 0 && timeout_ms > 0) {
-            rc = wait_for_socket_ready(listen_sock, SOCKET_WAIT_FOR_READ_READY, timeout_ms);
-
-            if(rc == STATUS_OK) {
-                accept_rc = accept(listen_sock, NULL, NULL);
-
-                if(accept_rc > 0) {
-                    *client_fd = accept_rc;
-                    rc = STATUS_OK;
-                    break;
-                } else {
-                    warn("Error accepting new connection!");
-                    rc = STATUS_INTERNAL_FAILURE;
-                }
-            }
-        }
-
-        if(accept_rc > 0) {
-            *client_fd = accept_rc;
-            rc = STATUS_OK;
+        if(accept_rc == 0) {
+            warn("Accept returned zero.  It should never do that!");
+            rc = STATUS_INTERNAL_FAILURE;
+            break;
         }
     } while(0);
 
@@ -445,8 +441,19 @@ status_t socket_accept(SOCKET listen_sock, SOCKET *client_fd, uint32_t timeout_m
 }
 
 
-
-status_t socket_read(int sock, slice_p read_buffer, uint32_t timeout_ms)
+/**
+ * @brief
+ *
+ * @param sock
+ * @param read_buffers
+ * @return status_t
+ *      STATUS_OK - the entire buffer was filled.
+ *      STATUS_PARTIAL - some of the buffer was filled.
+ *      STATUS_TERMINATE - the socket was closed.
+ *
+ *      other errors.
+ */
+status_t socket_read(int sock, slice_p buf)
 {
     status_t rc = STATUS_OK;
     int read_amt = 0;
@@ -454,81 +461,136 @@ status_t socket_read(int sock, slice_p read_buffer, uint32_t timeout_ms)
     info("Starting.");
 
     do {
-        rc = wait_for_socket_read_ready(sock, timeout_ms);
+        uint32_t slice_len = slice_get_len(buf);
+        if(slice_len == SLICE_LEN_ERROR) {
+            warn("Error getting slice length!");
+            rc = STATUS_INTERNAL_FAILURE;
+            break;
+        }
 
-        if(rc == STATUS_OK) {
-            rc = STATUS_PARTIAL;
+        if(slice_len == 0) {
+            info("Data buffer is of zero length, returning OK.");
+            rc = STATUS_OK;
+            break;
+        }
 
-            read_amt = (int)read(sock,read_buffer->start,(size_t)slice_get_len(read_buffer));
+        read_amt = (int)read(sock, slice_get_start_ptr(buf), (size_t)slice_get_len(buf));
 
-            if(read_amt > 0) {
-                /* got data. */
-                slice_truncate_to_offset(read_buffer, read_amt);
-                rc = STATUS_OK;
+        if(read_amt > 0) {
+            /* got data. */
+            rc = slice_set_start_delta(buf, read_amt);
+            if(rc == STATUS_OK) {
+                if(slice_get_len(buf) == 0) {
+                    /* done! */
+                    rc = STATUS_OK;
+                } else {
+                    /* only got some of the data */
+                    rc = STATUS_PARTIAL;
+                }
+            }
+
+            break;
+        }
+
+        if(read_amt == 0) {
+            info("The TCP connection was closed.");
+            rc = STATUS_TERMINATE;
+            break;
+        }
+
+        if(read_amt < 0) {
+            if(errno != EAGAIN && errno != EWOULDBLOCK) {
+                rc = get_sock_error();
                 break;
-            } else if(read_amt < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
-                warn("Socket read error: read_amt=%d, errno=%d", read_amt, errno);
-                rc = STATUS_INTERNAL_FAILURE;
             } else {
-                info("No data read.");
                 rc = STATUS_PARTIAL;
+                break;
             }
         }
     } while(0);
 
-    detail("Done: result %d.", rc);
+    detail("Done: result %s.", status_to_str(rc));
 
     return rc;
 }
 
 
-
-/* this blocks until all the data is written or there is an error. */
+/**
+ * @brief write data out the socket
+ *
+ * @param sock
+ * @param data
+ * @return status_t
+ *      STATUS_OK - all data was written.
+ *      STATUS_PARTIAL - some data was not written.
+ */
 status_t socket_write(int sock, slice_p data)
 {
     status_t rc = STATUS_PARTIAL;
     int write_amt = 0;
 
     info("socket_write(): writing data:");
-    debug_dump_buf(DEBUG_INFO, data->start, data->end);
+    debug_dump_ptr(DEBUG_INFO, data->start, data->end);
 
     do {
-        slice_t tmp_data = {0};
+        uint32_t slice_len = slice_get_len(data);
+        if(slice_len == SLICE_LEN_ERROR) {
+            warn("Error getting slice length!");
+            rc = STATUS_INTERNAL_FAILURE;
+            break;
+        }
+
+        if(slice_len == 0) {
+            info("Data buffer is of zero length, returning OK.");
+            rc = STATUS_OK;
+            break;
+        }
 
         write_amt = (int)write(sock, data->start, (size_t)slice_get_len(data));
+
+        if(write_amt > 0) {
+            uint32_t slice_len = 0;
+
+            /* some data written */
+            rc = slice_set_start_delta(data, write_amt);
+            if(rc != STATUS_OK) {
+                warn("Error setting start offset on slice! %s", status_to_str(rc));
+                break;
+            }
+
+            slice_len = slice_get_len(data);
+            if(slice_len == 0) {
+                /* success, we wrote everything! */
+                rc = STATUS_OK;
+                break;
+            }
+
+            if(slice_len != SLICE_LEN_ERROR) {
+                /* partial write */
+                rc = STATUS_PARTIAL;
+                break;
+            }
+
+            /* if we got here, then we had a problem getting the slice length! */
+            rc = STATUS_INTERNAL_FAILURE;
+            break;
+        }
+
         if(write_amt < 0) {
-            if(errno != EAGAIN || errno != EWOULDBLOCK) {
-                warn("Socket write error: rc=%d, errno=%d", rc, errno);
-                rc = STATUS_INTERNAL_FAILURE;
+            if(errno != EAGAIN && errno != EWOULDBLOCK) {
+                rc = get_sock_error();
                 break;
             } else {
                 /* we did not write any data or we were told we would block. */
-                rc = STATUS_WOULD_BLOCK;
+                rc = STATUS_PARTIAL;
                 break;
             }
         }
 
         if(write_amt == 0) {
-            info("No data written, but no errors.");
-            rc = STATUS_PARTIAL;
+            warn("Write returned zero. This is not supposed to happen!");
+            rc = STATUS_INTERNAL_FAILURE;
             break;
-        }
-
-        /* we wrote something. */
-        info("Wrote %d bytes out of %"PRIu32" of data.", write_amt, slice_get_len(data));
-
-        /* trim off the amount we wrote. */
-        rc = slice_split_at_offset(data, (uint32_t)write_amt, NULL, &tmp_data);
-        if(rc != STATUS_OK) {
-            warn("Error %s trying to split data slice!", status_to_str(rc));
-            break;
-        }
-
-        *data = tmp_data;
-
-        if(slice_get_len(&tmp_data) > 0) {
-            info("Did not write all the data.");
-            rc = STATUS_PARTIAL;
         }
     } while(0);
 
