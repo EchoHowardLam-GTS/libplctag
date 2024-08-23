@@ -57,4 +57,4 @@ extern void debug_impl(const char *func, int line, debug_level_t level, const ch
 #define detail(...) debug_impl(__func__, __LINE__, DEBUG_DETAIL, __VA_ARGS__)
 #define flood(...) debug_impl(__func__, __LINE__, DEBUG_FLOOD, __VA_ARGS__)
 
-extern void debug_dump_buf(debug_level_t level, uint8_t *start, uint8_t *end);
+extern void debug_dump_ptr(debug_level_t level, uint8_t *start, uint8_t *end);

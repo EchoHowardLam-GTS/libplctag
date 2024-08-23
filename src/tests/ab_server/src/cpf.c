@@ -219,7 +219,7 @@ status_t cpf_dispatch_unconnected_request(slice_p request, slice_p response, plc
     slice_t response_payload_slice = {0};
 
     info("got request:");
-    debug_dump_buf(DEBUG_INFO, request->start, request->end);
+    debug_dump_ptr(DEBUG_INFO, request->start, request->end);
 
     do {
         uint32_t offset = 0;

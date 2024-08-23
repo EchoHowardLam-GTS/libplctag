@@ -102,7 +102,7 @@ status_t eip_process_request(slice_p request, slice_p response, app_connection_d
     (void)app_data;
 
     info("got packet:");
-    debug_dump_buf(DEBUG_INFO, request->start, request->end);
+    debug_dump_ptr(DEBUG_INFO, request->start, request->end);
 
     do {
         uint32_t session_handle = 0;

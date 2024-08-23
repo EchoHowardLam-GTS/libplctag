@@ -95,7 +95,7 @@ void debug_impl(const char *func, int line, debug_level_t level, const char *tem
 #define COLUMNS (size_t)(16)
 
 
-void debug_dump_buf(debug_level_t level, uint8_t *start_buf, uint8_t *end_buf)
+void debug_dump_ptr(debug_level_t level, uint8_t *start_buf, uint8_t *end_buf)
 {
     intptr_t data_len = 0;
     size_t max_row = 0;
