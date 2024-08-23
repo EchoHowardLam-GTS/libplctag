@@ -90,16 +90,18 @@ static status_t register_session(slice_p request, slice_p response, plc_connecti
 static status_t unregister_session(slice_p request, slice_p response, plc_connection_p connection);
 
 
-status_t eip_dispatch_request(slice_p request, slice_p response, tcp_connection_p connection_arg)
+status_t eip_process_request(slice_p request, slice_p response, app_connection_data_p app_connection_data, app_data_p app_data)
 {
     status_t rc = STATUS_OK;
-    plc_connection_p connection = (plc_connection_p)connection_arg;
+    plc_connection_p connection = (plc_connection_p)app_connection_data;
     uint8_t *saved_start = NULL;
     slice_t request_header_slice = {0};
     slice_t response_header_slice = {0};
     eip_pdu_t pdu = {0};
 
-    info("eip_dispatch_request(): got packet:");
+    (void)app_data;
+
+    info("got packet:");
     debug_dump_buf(DEBUG_INFO, request->start, request->end);
 
     do {
@@ -107,7 +109,7 @@ status_t eip_dispatch_request(slice_p request, slice_p response, tcp_connection_
 
         assert_detail((slice_get_len(request) >= EIP_HEADER_SIZE), STATUS_NO_RESOURCE, "Not enough data for the EIP request PDU.");
 
-        rc = decode_eip_pdu(request, &pdu);
+        rc = decode_eip_pdu(request, response, &pdu);
         if(rc != STATUS_OK) {
             warn("Got error %s attempting to decode the EIP PDU!", status_to_str(rc));
             break;

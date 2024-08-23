@@ -33,9 +33,32 @@
 
 #pragma once
 
-#include "plc.h"
-#include "utils/slice.h"
+#include <stddef.h>
+#include <stdint.h>
+
+#include "utils/mutex_compat.h"
 #include "utils/status.h"
 #include "utils/tcp_server.h"
 
-extern status_t eip_process_request(slice_p request, slice_p response, app_connection_data_p app_connection_data, app_data_p app_data);
+#include "plc.h"
+
+
+status_t clean_up_plc_connection_data(app_connection_data_p app_connection_data, app_data_p app_data)
+{
+    (void)app_connection_data;
+    (void)app_data;
+
+    return STATUS_OK;
+}
+
+
+status_t init_plc_connection_data(app_connection_data_p app_connection_data, app_data_p app_data)
+{
+    plc_connection_p connection = (plc_connection_p)app_connection_data;
+    plc_connection_p template_connection = (plc_connection_p)app_data;
+
+    /* copy the template data */
+    *connection = *template_connection;
+
+    return STATUS_OK;
+}

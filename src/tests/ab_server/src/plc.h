@@ -107,7 +107,7 @@ const uint32_t MAX_DEVICE_BUFFER_SIZE = (8192);
 const uint8_t MAX_CIP_DEVICE_PATH_WORDS = (20);
 
 typedef struct {
-    struct tcp_connection_t tcp_connection;
+    // struct tcp_connection_t tcp_connection;
 
     /* PLC info */
     plc_type_t plc_type;
@@ -157,10 +157,8 @@ typedef struct pdu_t pdu_t;
 typedef pdu_t *pdu_p;
 
 
-static inline bool program_terminating(plc_connection_p connection)
-{
-    return !connection || *(connection->tcp_connection.terminate);
-}
+extern status_t clean_up_plc_connection_data(app_connection_data_p app_connection_data, app_data_p app_data);
+extern status_t init_plc_connection_data(app_connection_data_p app_connection_data, app_data_p app_data);
 
 
 #define GET_FIELD(SLICE, TYPE, ADDR, SIZE)                                                          \

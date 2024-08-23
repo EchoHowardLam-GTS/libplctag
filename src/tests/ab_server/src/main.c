@@ -51,7 +51,7 @@
 static plc_connection_t template_plc_connection = {0};
 
 static void usage(void);
-static tcp_connection_p allocate_client(void *template_connection_arg);
+// static tcp_connection_p allocate_client(void *template_connection_arg);
 
 
 #ifdef IS_WINDOWS
@@ -135,8 +135,15 @@ void setup_break_handler(void)
 #endif
 
 
+bool program_terminating(app_data_p app_data);
+void terminate_program(app_data_p app_data);
+
+
+
 int main(int argc, const char **argv)
 {
+    tcp_server_config_t server_config = {0};
+
     /* set up handler for ^C etc. */
     setup_break_handler();
 
@@ -149,8 +156,20 @@ int main(int argc, const char **argv)
         usage();
     }
 
+    server_config.host = "0.0.0.0";
+    server_config.port = (template_plc_connection.port_string ? template_plc_connection.port_string : "44818");
+
+    server_config.app_connection_data_size = sizeof(plc_connection_t);
+    server_config.app_data = (app_data_p)&template_plc_connection;
+    server_config.buffer_size = MAX_DEVICE_BUFFER_SIZE;
+    server_config.clean_up_app_connection_data = clean_up_plc_connection_data;
+    server_config.init_app_connection_data = init_plc_connection_data;
+    server_config.process_request = eip_process_request;
+    server_config.program_terminating = program_terminating;
+    server_config.terminate_program = terminate_program;
+
     /* open a server connection and listen on the right port. */
-    tcp_server_run("0.0.0.0", (template_plc_connection.port_string ? template_plc_connection.port_string : "44818"), &done, allocate_client, (void *)&template_plc_connection);
+    tcp_server_run(&server_config);
 
     return 0;
 }
@@ -196,25 +215,34 @@ void usage(void)
 }
 
 
-tcp_connection_p allocate_client(void *template_connection_arg)
+
+status_t init_plc_connection_data(app_connection_data_p app_connection_data, app_data_p app_data)
 {
-    plc_connection_p template_connection = (plc_connection_p)template_connection_arg;
-    size_t connection_state_size = sizeof(*template_connection);
-    plc_connection_p connection = NULL;
-
-    connection = calloc(1, connection_state_size);
-
-    assert_error((connection), "Unable to allocate new connection state!");
+    plc_connection_p connection = (plc_connection_p)app_connection_data;
+    plc_connection_p template_connection = (plc_connection_p)app_data;
 
     /* copy the template data */
     *connection = *template_connection;
 
     /* fill in anything that changes */
-    connection->tcp_connection.request_buffer.start = &(connection->pdu_data_buffer);
-    connection->tcp_connection.request_buffer.end = &(connection->pdu_data_buffer) + MAX_DEVICE_BUFFER_SIZE;
-    connection->tcp_connection.response_buffer.start = &(connection->pdu_data_buffer);
-    connection->tcp_connection.response_buffer.end = &(connection->pdu_data_buffer) + MAX_DEVICE_BUFFER_SIZE;
-    connection->tcp_connection.handler = eip_dispatch_request;
+    // connection->tcp_connection.request_buffer.start = &(connection->pdu_data_buffer);
+    // connection->tcp_connection.request_buffer.end = &(connection->pdu_data_buffer) + MAX_DEVICE_BUFFER_SIZE;
+    // connection->tcp_connection.response_buffer.start = &(connection->pdu_data_buffer);
+    // connection->tcp_connection.response_buffer.end = &(connection->pdu_data_buffer) + MAX_DEVICE_BUFFER_SIZE;
+    // connection->tcp_connection.handler = eip_process_request;
 
-    return (tcp_connection_p)connection;
+    return STATUS_OK;
+}
+
+
+bool program_terminating(app_data_p app_data)
+{
+    (void)app_data;
+
+    return (done ? true : false);
+}
+
+void terminate_program(app_data_p app_data)
+{
+    (void)app_data;
 }
