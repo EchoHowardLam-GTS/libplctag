@@ -54,14 +54,15 @@ struct tcp_connection_t {
     app_data_p app_data;
     app_connection_data_p app_connection_data;
 
-    slice_t request;
-    slice_t response;
+    slice_t buffer;
 };
 
 typedef struct tcp_connection_t tcp_connection_t;
 
 typedef tcp_connection_t *tcp_connection_p;
 
+
+static volatile bool server_running = false;
 
 
 // static tcp_connection_p allocate_new_client(void *app_data);
@@ -77,9 +78,12 @@ void tcp_server_run(tcp_server_config_p config)
     uint32_t client_state_size = sizeof(tcp_connection_t) + config->app_connection_data_size + config->buffer_size;
     uint8_t *data_buffer = NULL;
 
+    /* starting up, set the run control flag */
+    server_running = true;
+
     rc = socket_open(config->host, config->port, true, &listen_fd);
 
-    assert_error((rc == STATUS_OK), "Unable to open listener TCP socket, error code!");
+    assert_error((rc == STATUS_OK), "Unable to open listener TCP socket, error code %s!", status_to_str(rc));
 
     do {
         socket_event_t events = SOCKET_EVENT_NONE;
@@ -93,14 +97,13 @@ void tcp_server_run(tcp_server_config_p config)
                 break;
             }
 
-            if(events & SOCKET_EVENT_ACCEPT) {
-                /* we got an event that accept can be run. */
-                rc = socket_accept(listen_fd, &client_fd);
-            } else {
-                /* again, just go around once more */
+            if(!(events & SOCKET_EVENT_ACCEPT)) {
+                /* not our event? */
                 break;
             }
 
+                /* we got an event that accept can be run. */
+            rc = socket_accept(listen_fd, &client_fd);
             if(rc != STATUS_OK) {
                 warn("Unable to accept new client connection!  Got error %s!", status_to_str(rc));
                 break;
@@ -122,10 +125,12 @@ void tcp_server_run(tcp_server_config_p config)
             connection->server_config = config;
             connection->app_data = config->app_data;
             connection->app_connection_data = (app_connection_data_p)((char*)connection + sizeof(tcp_connection_t));
-            connection->request.start = data_buffer;
-            connection->request.end = data_buffer + config->buffer_size;
-            connection->response.start = data_buffer;
-            connection->response.end = data_buffer + config->buffer_size;
+
+            if(!slice_init_parent(&(connection->buffer), data_buffer, config->buffer_size)) {
+                rc = slice_get_status(&(connection->buffer));
+                warn("Unable to initialize the buffer slice, with error %s!", status_to_str(rc));
+                break;
+            }
 
             /* call the app-provided connection state init function to set up the state */
             rc = config->init_app_connection_data(connection->app_connection_data, connection->app_data);
@@ -140,10 +145,12 @@ void tcp_server_run(tcp_server_config_p config)
 
             assert_error((client_thread), "Unable to create client connection handler thread!");
         } while(0); /* else any other value than timeout and we'll drop out of the loop */
-    } while(!(config->program_terminating(config->app_data)) && (rc == STATUS_OK || rc == STATUS_TIMEOUT));
 
-    /* flag program termination for other threads. */
-    config->terminate_program(config->app_data);
+        if(config->program_terminating(config->app_data)) {
+            warn("App is flagged for termination.");
+            server_running = false;
+        }
+    } while(server_running && (rc == STATUS_OK || rc == STATUS_TIMEOUT));
 
     info("TCP server run function quitting.");
 
@@ -163,81 +170,13 @@ void tcp_server_run(tcp_server_config_p config)
 /******** Helpers *********/
 
 
-static status_t get_and_process_request(tcp_connection_p connection, slice_p request, slice_p response, slice_p remaining_buffer)
-{
-    status_t rc = STATUS_OK;
-
-    detail("Starting.");
-
-    do {
-        socket_event_t events = SOCKET_EVENT_NONE;
-
-        rc = socket_event_wait(connection->sock_fd, SOCKET_EVENT_READ, &events, 150);
-        if(rc != STATUS_OK && rc != STATUS_TIMEOUT) {
-            warn("Error %s waiting for socket to be ready to read!", status_to_str(rc));
-            break;
-        }
-
-        /* FIXME shouldn't we check to see if the READ event is set? */
-
-        /* get an incoming packet or a partial packet. */
-        rc = socket_read(connection->sock_fd, remaining_buffer);
-
-        /* did we get data? */
-        if(rc == STATUS_OK) {
-            /* set the request end to the end of the new data */
-            if((rc = slice_truncate_to_ptr(request, remaining_buffer->start)) != STATUS_OK) {
-                warn("Error %s trying to truncate request slice!", status_to_str(rc));
-                break;
-            }
-
-            /* try to process the packet. */
-            rc = connection->server_config->process_request(request, response, connection->app_connection_data, connection->app_data);
-        }
-    } while(!connection->server_config->program_terminating(connection->app_data) && rc == STATUS_TIMEOUT);
-
-    detail("Done with status %s.", status_to_str(rc));
-
-    return rc;
-}
-
-
-static status_t send_response(tcp_connection_p connection, slice_p response)
-{
-    status_t rc = STATUS_OK;
-
-    do {
-        socket_event_t events = SOCKET_EVENT_NONE;
-
-        rc = socket_event_wait(connection->sock_fd, SOCKET_EVENT_WRITE, &events, 150);
-        if(rc != STATUS_OK && rc != STATUS_TIMEOUT) {
-            warn("Error %s waiting for socket to be ready to write!", status_to_str(rc));
-            break;
-        }
-
-        rc = socket_write(connection->sock_fd, &response);
-    } while(!connection->server_config->program_terminating(connection->app_data)
-            && (rc == STATUS_OK || rc == STATUS_TIMEOUT)
-            && slice_get_len(&response) > 0
-            );
-
-    if(slice_get_len(&response)) {
-        /* if we could not write the response, kill the connection. */
-        info("Unable to write full response!");
-        rc = STATUS_TERMINATE;
-    }
-
-    return rc;
-}
 
 
 THREAD_FUNC(connection_handler, connection_ptr_arg)
 {
     status_t rc = STATUS_OK;
     tcp_connection_p connection = (tcp_connection_p)connection_ptr_arg;
-    slice_t request = {0};
-    slice_t response = {0};
-    slice_t remaining_buffer = {0};
+    slice_t pdu = {0};
 
     info("Got new client connection, going into processing loop.");
     do {
@@ -245,17 +184,76 @@ THREAD_FUNC(connection_handler, connection_ptr_arg)
 
         /* reset the buffers */
         detail("Resetting request and response buffers.");
-        request = connection->request;
-        response = connection->response;
-        remaining_buffer = request;
 
-
-        rc = get_and_process_request(connection, &request, &response, &remaining_buffer);
-        if(rc == STATUS_OK) {
-            /* write out the response */
-            rc = send_response(connection, &response);
+        /* set the start and end to zero.  The processing routine will ask for specific amounts of data. */
+        if(!slice_init_child(&pdu, &(connection->buffer), 0, 0)) {
+            rc = slice_get_status(&pdu);
+            if(rc != STATUS_OK) {
+                warn("Unable to initialize the PDU buffer, error %s!", status_to_str(rc));
+                break;
+            }
         }
-    } while(!connection->server_config->program_terminating(connection->app_data) && rc == STATUS_OK);
+
+        /* process one request */
+        do {
+            /* Loop until we have the requested amount of data. */
+            do {
+                socket_event_t events = SOCKET_EVENT_NONE;
+
+                rc = socket_event_wait(connection->sock_fd, SOCKET_EVENT_READ, &events, 100);
+                if(rc == STATUS_OK) {
+                    /* read the socket, returns partial if we did not real the whole buffer. */
+                    rc = socket_read(connection->sock_fd, &pdu);
+                }
+            } while(server_running && (rc == STATUS_TIMEOUT || rc == STATUS_PARTIAL));
+
+
+            /* we read the requested amount of data for a PDU request, now process it. */
+            if(rc == STATUS_OK) {
+                uint32_t pdu_len = 0;
+
+                /* ready the PDU for processing. */
+                rc = slice_set_start(&pdu, 0);
+                if(rc != STATUS_OK) {
+                    warn("Error trying to set the slice start index!");
+                    break;
+                }
+
+                pdu_len = slice_get_len(&pdu);
+                if(pdu_len == SLICE_LEN_ERROR) {
+                    warn("Error getting the PDU slice length!");
+                    break;
+                }
+
+                if(pdu_len > 0) {
+                    info("Got request PDU:");
+                    debug_dump_ptr(DEBUG_INFO, slice_get_start_ptr(&pdu), slice_get_end_ptr(&pdu));
+                } else {
+                    info("Got zero length request PDU.");
+                }
+
+                rc = connection->server_config->process_request(&pdu, connection->app_connection_data, connection->app_data);
+            }
+
+            if(rc == STATUS_OK) {
+                /* we processed the PDU, now write the results */
+
+                info("Ready to write PDU response:");
+                debug_dump_ptr(DEBUG_INFO, pdu.data + pdu.start, pdu.data + pdu.end);
+
+                /* Loop until we write the requested amount of data. */
+                do {
+                    socket_event_t events = SOCKET_EVENT_NONE;
+
+                    rc = socket_event_wait(connection->sock_fd, SOCKET_EVENT_WRITE, &events, 100);
+                    if(rc == STATUS_OK) {
+                        /* read the socket, returns partial if we did not write the whole buffer. */
+                        rc = socket_write(connection->sock_fd, &pdu);
+                    }
+                } while(server_running && (rc == STATUS_TIMEOUT || rc == STATUS_PARTIAL)); /* write loop */
+            }
+        } while(server_running && (rc == STATUS_TIMEOUT || rc == STATUS_PARTIAL)); /* single request retry loop */
+    } while(server_running && rc == STATUS_OK); /* main processing loop */
 
     info("TCP client connection thread is terminating.");
 

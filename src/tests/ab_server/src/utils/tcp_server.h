@@ -62,7 +62,8 @@ typedef bool (*program_terminating_func)(app_data_p app_data);
 typedef void (*terminate_program_func)(app_data_p app_data);
 typedef status_t (*init_app_connection_data_func)(app_connection_data_p app_connection_data, app_data_p app_data);
 typedef status_t (*clean_up_app_connection_data_func)(app_connection_data_p app_connection_data, app_data_p app_data);
-typedef status_t (*process_request_func)(slice_p request, slice_p response, app_connection_data_p app_connection_data, app_data_p app_data);
+
+typedef status_t (*process_request_func)(slice_p pdu, app_connection_data_p app_connection_data, app_data_p app_data);
 
 
 typedef struct tcp_server_config_t {
