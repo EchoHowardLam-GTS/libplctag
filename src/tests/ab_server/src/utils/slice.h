@@ -33,6 +33,7 @@
 
 #pragma once
 
+#include <float.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <string.h>
@@ -40,292 +41,168 @@
 #include "status.h"
 
 
+#define SLICE_MAX_LEN (INT32_MAX / 2)
+#define SLICE_LEN_ERROR (INT32_MAX)
+
+
 typedef struct slice_t {
-    uint8_t *start;
-    uint8_t *end;
+    struct slice_t *parent;
+    uint8_t *data;
+    uint32_t start;
+    uint32_t end;
+    status_t status;
 } slice_t;
 
 typedef slice_t *slice_p;
 
 
-#define SLICE_STATIC_INIT(START, END) { .start = (START), .end = (END) }
+#define SLICE_STATIC_INIT_PTR(START, END) { .start = (START), .end = (END) }
+#define SLICE_STATIC_INIT_LEN(START, LEN) { .start = (START), .end = ((START + (LEN))) }
 
 
-extern status_t slice_init(slice_p slice, uint8_t *start, uint8_t *end)
+
+
+extern bool slice_init_parent(slice_p slice, uint8_t *data, uint32_t data_len);
+extern bool slice_init_child(slice_p slice, slice_p parent, uint32_t start_offset, uint32_t end_offset);
+
+static inline uint32_t slice_get_start(slice_p slice)
 {
-    if(slice) {
-        slice->start = start;
-        slice->end = end;
+    return (slice ? slice->start : SLICE_LEN_ERROR);
+}
 
-        return STATUS_OK;
+static inline uint8_t *slice_get_start_ptr(slice_p slice)
+{
+    return (slice ? (slice->data + slice->start) : NULL);
+}
+
+extern status_t slice_set_start(slice_p slice, uint32_t start_abs);
+extern status_t slice_set_start_delta(slice_p slice, int32_t start_delta);
+
+static inline uint32_t slice_get_end(slice_p slice)
+{
+    return (slice ? slice->end : SLICE_LEN_ERROR);
+}
+
+static inline uint8_t *slice_get_end_ptr(slice_p slice)
+{
+    return (slice ? (slice->data + slice->end) : NULL);
+}
+
+extern status_t slice_set_end(slice_p slice, uint32_t end_abs);
+extern status_t slice_set_end_delta(slice_p slice, int32_t end_delta);
+
+static inline status_t slice_get_status(slice_p slice)
+{
+    if(!slice) {
+        return STATUS_NULL_PTR;
     }
 
-    return STATUS_NULL_PTR;
-}
-
-
-static inline bool slice_contains_ptr(slice_p slice, uint8_t *ptr)
-{
-    return slice && ptr && ((intptr_t)(slice->start) <= (intptr_t)(ptr) && (intptr_t)(ptr) < (intptr_t)(slice->end));
-}
-
-static inline bool slice_contains_offset(slice_p slice, uint32_t offset)
-{
-    return slice && ((intptr_t)(slice->start + offset) < (intptr_t)(slice->end));
-}
-
-static inline bool slice_contains_slice(slice_p outer, slice_p inner)
-{
-    return outer && inner && ((intptr_t)(outer->start) <= (intptr_t)(inner->start) && (intptr_t)(inner->end) <= (intptr_t)(outer->end));
+    return slice->status;
 }
 
 static inline uint32_t slice_get_len(slice_p slice)
 {
-    if(slice && slice->start && slice->end) {
-        if((intptr_t)(slice->end) >= (intptr_t)(slice->start)) {
-            return (uint32_t)((intptr_t)(slice->end) - (intptr_t)(slice->start));
+    return (slice ? (slice->end - slice->start) : SLICE_LEN_ERROR);
+}
+
+/* The new length is start  + new_len and the end offset is changed */
+extern bool slice_set_len(slice_p slice, uint32_t new_len);
+
+
+
+/* does the slice have data at the offset? */
+static inline bool slice_contains_offset(slice_p slice, uint32_t offset)
+{
+    return slice && (slice->start <= offset && offset < slice->end);
+}
+
+static inline bool slice_contains_slice(slice_p outer, slice_p inner)
+{
+    return outer && inner && (outer->start <= inner->start && inner->end <= outer->end);
+}
+
+
+
+
+/*
+ *  Data routines and definitions.
+ */
+
+typedef enum {
+    SLICE_BYTE_ORDER_LE,
+    SLICE_BYTE_ORDER_BE,
+    SLICE_BYTE_ORDER_WORD_SWAP = 0x1000,
+} slice_byte_order_t;
+
+
+extern uint64_t slice_get_uint(slice_p slice, uint32_t offset, slice_byte_order_t byte_order, uint8_t num_bits);
+extern bool slice_set_uint(slice_p slice, uint32_t offset, slice_byte_order_t byte_order, uint8_t num_bits, uint64_t val);
+
+static inline int64_t slice_get_int(slice_p slice, uint32_t offset, slice_byte_order_t byte_order, uint8_t num_bits)
+{
+    return (int64_t)slice_get_uint(slice, offset, byte_order, num_bits);
+}
+
+static inline bool slice_set_int(slice_p slice, uint32_t offset, slice_byte_order_t byte_order, uint8_t num_bits, uint64_t val)
+{
+    return slice_set_uint(slice, offset, byte_order, num_bits, (uint64_t)val);
+}
+
+
+
+static inline double slice_get_float(slice_p slice, uint32_t offset, slice_byte_order_t byte_order, uint8_t num_bits)
+{
+    double d_result = 0.0;
+
+    do {
+        uint64_t u_result = 0;
+
+        if(!slice) {
+            break;
         }
-    }
 
-    return 0;
+        if(num_bits != 32 || num_bits != 64) {
+            slice->status = STATUS_NOT_SUPPORTED;
+            break;
+        }
+
+        uint64_t u_result = slice_get_uint(slice, offset, byte_order, num_bits);
+
+        memcpy(&d_result, &u_result, sizeof(d_result));
+    } while(0);
+
+    return d_result;
 }
 
 
-static inline uint32_t slice_get_len_to_ptr(slice_p slice, uint8_t *ptr)
+
+static inline bool slice_set_float(slice_p slice, uint32_t offset, slice_byte_order_t byte_order, uint8_t num_bits, double val)
 {
-    if(slice && ptr && slice_contains_ptr(slice, ptr)) {
-        return (uint32_t)((intptr_t)(ptr) - (intptr_t)(slice->start));
-    }
+    status_t rc = STATUS_OK;
 
-    return 0;
-}
+    do {
+        uint64_t u_val = 0;
 
-/* this doesn't really do anything but does error check the passed slice pointer */
-static inline uint32_t slice_get_len_to_offset(slice_p slice, uint32_t offset)
-{
-    if(slice) {
-        return offset;
-    }
+        if(!slice) {
+            rc = STATUS_NULL_PTR;
+            break;
+        }
 
-    return 0;
-}
+        if(num_bits != 32 || num_bits != 64) {
+            slice->status = STATUS_NOT_SUPPORTED;
+            break;
+        }
 
-static inline uint32_t slice_get_len_from_ptr(slice_p slice, uint8_t *ptr)
-{
-    if(slice && ptr && slice_contains_ptr(slice, ptr)) {
-        return (uint32_t)((intptr_t)(slice->end) - (intptr_t)(ptr));
-    }
+        memcpy(&u_val, &val, sizeof(u_val));
 
-    return 0;
-}
+        slice_set_uint(slice, offset, byte_order, num_bits, u_val);
 
-static inline uint32_t slice_get_len_from_offset(slice_p slice, uint32_t offset)
-{
-    if(slice) {
-        return slice_get_len_from_ptr(slice, slice->start + offset);
-    }
+        rc = slice_get_status(slice);
+    } while(0);
 
-    return 0;
-}
-
-extern status_t slice_truncate_to_ptr(slice_p slice, uint8_t *ptr);
-
-static inline status_t slice_truncate_to_offset(slice_p slice, uint32_t offset)
-{
-    if(!slice) {
-        return STATUS_NULL_PTR;
-    }
-
-    return slice_truncate_to_ptr(slice, slice->start + offset);
-}
-
-extern status_t slice_truncate_to_slice_end(slice_p slice, slice_p end_slice);
-
-extern status_t slice_split_at_ptr(slice_p source, uint8_t *cut_ptr, slice_p first_part, slice_p second_part);
-
-extern status_t slice_split_at_offset(slice_p source, uint32_t offset, slice_p first_part, slice_p second_part);
-
-extern status_t slice_split_middle_at_offsets(slice_p slice, uint32_t start_offset, uint32_t end_offset, slice_p first, slice_p second, slice_p third);
-
-extern status_t slice_to_string(slice_p slice, char *result, uint32_t result_size, bool word_swap);
-extern status_t string_to_slice(const char *source, slice_p dest, bool word_swap);
-
-extern status_t slice_from_slice(slice_p parent, slice_p new_slice, uint8_t *start, uint8_t *end);
-
-
-extern status_t slice_get_u8_ptr(slice_p slice, uint8_t *ptr, uint8_t *val);
-extern status_t slice_set_u8_ptr(slice_p slice, uint8_t *ptr, uint8_t val);
-extern status_t slice_get_u8_offset(slice_p slice, uint32_t offset, uint8_t *val);
-extern status_t slice_set_u8_offset(slice_p slice, uint32_t offset, uint8_t val);
-
-extern status_t slice_get_u16_le_at_ptr(slice_p slice, uint8_t *ptr, uint16_t *val);
-extern status_t slice_set_u16_le_at_ptr(slice_p slice, uint8_t *ptr, uint16_t val);
-
-static inline status_t slice_get_u16_le_at_offset(slice_p slice, uint32_t offset, uint16_t *val)
-{
-    if(!slice) {
-        return STATUS_NULL_PTR;
-    }
-
-    return slice_get_u16_le_at_ptr(slice, slice->start + offset, val);
-}
-
-static inline status_t slice_set_u16_le_at_offset(slice_p slice, uint32_t offset, uint16_t val)
-{
-    if(!slice) {
-        return STATUS_NULL_PTR;
-    }
-
-    return slice_set_u16_le_at_ptr(slice, slice->start + offset, val);
-}
-
-extern status_t slice_get_u32_le_at_ptr(slice_p slice, uint8_t *ptr, uint32_t *val);
-extern status_t slice_set_u32_le_at_ptr(slice_p slice, uint8_t *ptr, uint32_t val);
-
-static inline status_t slice_get_u32_le_at_offset(slice_p slice, uint32_t offset, uint32_t *val)
-{
-    if(!slice) {
-        return STATUS_NULL_PTR;
-    }
-
-    return slice_get_u32_le_at_ptr(slice, slice->start + offset, val);
-}
-
-static inline status_t slice_set_u32_le_at_offset(slice_p slice, uint32_t offset, uint32_t val)
-{
-    if(!slice) {
-        return STATUS_NULL_PTR;
-    }
-
-    return slice_set_u32_le_at_ptr(slice, slice->start + offset, val);
+    return (rc == STATUS_OK);
 }
 
 
-extern status_t slice_get_u64_le_at_ptr(slice_p slice, uint8_t *ptr, uint64_t *val);
-extern status_t slice_set_u64_le_at_ptr(slice_p slice, uint8_t *ptr, uint64_t val);
-
-static inline status_t slice_get_u64_le_at_offset(slice_p slice, uint32_t offset, uint64_t *val)
-{
-    if(!slice) {
-        return STATUS_NULL_PTR;
-    }
-
-    return slice_get_u64_le_at_ptr(slice, slice->start + offset, val);
-}
-
-static inline status_t slice_set_u64_le_at_offset(slice_p slice, uint32_t offset, uint64_t val)
-{
-    if(!slice) {
-        return STATUS_NULL_PTR;
-    }
-
-    return slice_set_u64_le_at_ptr(slice, slice->start + offset, val);
-}
-
-
-
-static inline status_t slice_get_i16_le_at_ptr(slice_p slice, uint8_t *ptr, int16_t *val)
-{
-    return slice_get_u16_le_at_ptr(slice, ptr, (uint16_t*)val);
-}
-
-static inline status_t slice_set_i16_le_at_ptr(slice_p slice, uint8_t *ptr, int16_t val)
-{
-    return slice_set_u16_le_at_ptr(slice, ptr, (uint16_t)val);
-}
-
-static inline status_t slice_get_i16_le_at_offset(slice_p slice, uint32_t offset, int16_t *val)
-{
-    return slice_get_u16_le_at_offset(slice, offset, (uint16_t*)val);
-}
-
-static inline status_t slice_set_i16_le_at_offset(slice_p slice, uint32_t offset, int16_t val)
-{
-    return slice_set_u16_le_at_offset(slice, offset, (uint16_t)val);
-}
-
-static inline status_t slice_get_i32_le_at_ptr(slice_p slice, uint8_t *ptr, int32_t *val)
-{
-    return slice_get_u32_le_at_ptr(slice, ptr, (uint32_t*)val);
-}
-
-static inline status_t slice_set_i32_le_at_ptr(slice_p slice, uint8_t *ptr, int32_t val)
-{
-    return slice_set_u32_le_at_ptr(slice, ptr, (uint32_t)val);
-}
-
-static inline status_t slice_get_i32_le_at_offset(slice_p slice, uint32_t offset, int32_t *val)
-{
-    return slice_get_u32_le_at_offset(slice, offset, (uint32_t*)val);
-}
-
-static inline status_t slice_set_i32_le_at_offset(slice_p slice, uint32_t offset, int32_t val)
-{
-    return slice_set_u32_le_at_offset(slice, offset, (uint32_t)val);
-}
-
-
-static inline status_t slice_get_i64_le_at_ptr(slice_p slice, uint8_t *ptr, int64_t *val)
-{
-    return slice_get_u64_le_at_ptr(slice, ptr, (uint64_t*)val);
-}
-
-static inline status_t slice_set_i64_le_at_ptr(slice_p slice, uint8_t *ptr, int64_t val)
-{
-    return slice_set_u64_le_at_ptr(slice, ptr, (uint64_t)val);
-}
-
-static inline status_t slice_get_i64_le_at_offset(slice_p slice, uint32_t offset, int64_t *val)
-{
-    return slice_get_u64_le_at_offset(slice, offset, (uint64_t*)val);
-}
-
-static inline status_t slice_set_i64_le_at_offset(slice_p slice, uint32_t offset, int64_t val)
-{
-    return slice_set_u64_le_at_offset(slice, offset, (uint64_t)val);
-}
-
-
-
-extern status_t slice_get_f32_le_at_ptr(slice_p slice, uint8_t *ptr, float *val);
-extern status_t slice_set_f32_le_at_ptr(slice_p slice, uint8_t *ptr, float val);
-
-static inline status_t slice_get_f32_le_at_offset(slice_p slice, uint32_t offset, float *val)
-{
-    if(!slice) {
-        return STATUS_NULL_PTR;
-    }
-
-    return slice_get_f32_le_at_ptr(slice, slice->start + offset, val);
-}
-
-static inline status_t slice_set_f32_le_at_offset(slice_p slice, uint32_t offset, float val)
-{
-    if(!slice) {
-        return STATUS_NULL_PTR;
-    }
-
-    return slice_set_f32_le_at_ptr(slice, slice->start + offset, val);
-}
-
-
-extern status_t slice_get_f64_le_at_ptr(slice_p slice, uint8_t *ptr, double *val);
-extern status_t slice_set_f64_le_at_ptr(slice_p slice, uint8_t *ptr, double val);
-
-static inline status_t slice_get_f64_le_at_offset(slice_p slice, uint32_t offset, double *val)
-{
-    if(!slice) {
-        return STATUS_NULL_PTR;
-    }
-
-    return slice_get_f64_le_at_ptr(slice, slice->start + offset, val);
-}
-
-static inline status_t slice_set_f64_le_at_offset(slice_p slice, uint32_t offset, float val)
-{
-    if(!slice) {
-        return STATUS_NULL_PTR;
-    }
-
-    return slice_set_f64_le_at_ptr(slice, slice->start + offset, val);
-}
+extern bool slice_get_byte_string(slice_p slice, uint8_t *dest, uint32_t dest_size, bool byte_swap);
+extern bool slice_set_byte_string(slice_p slice, uint8_t *src, uint32_t src_size, bool byte_swap);
