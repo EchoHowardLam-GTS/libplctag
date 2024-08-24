@@ -161,20 +161,38 @@ extern status_t clean_up_plc_connection_data(app_connection_data_p app_connectio
 extern status_t init_plc_connection_data(app_connection_data_p app_connection_data, app_data_p app_data);
 
 
-#define GET_FIELD(SLICE, TYPE, ADDR, SIZE)                                                          \
-        if((rc = slice_get_ ## TYPE ## _le_at_offset((SLICE), offset, (ADDR))) != STATUS_OK) {      \
-            warn("Unable to get field at offset %"PRIu32"! Error: %s!", offset, status_to_str(rc)); \
-           break;                                                                                   \
-        }                                                                                           \
-        offset += (SIZE)
 
-
-#define SET_FIELD(SLICE, TYPE, VAL, SIZE)                                                           \
-        if((rc = slice_set_ ## TYPE ## _le_at_offset((SLICE), offset, (VAL))) != STATUS_OK) {       \
-            warn("Unable to set field at offset %"PRIu32"! Error: %s!", offset, status_to_str(rc)); \
+#define GET_UINT_FIELD(SLICE, VAR)                                                                  \
+        (VAR) = (TYPEOF(VAR))slice_get_uint(SLICE, offset, SLICE_BYTE_ORDER_LE, (sizeof(VAR) * 8)); \
+        offset += (uint32_t)(sizeof(VAR));                                                          \
+        if((rc = slice_get_status(SLICE)) != STATUS_OK) {                                           \
+            warn("Error %s getting " #VAR ".", status_to_str);                                      \
             break;                                                                                  \
-        }                                                                                           \
-        offset += (SIZE)
+        } do{}while(0)
+
+#define SET_UINT_FIELD(SLICE, VAR)                                                              \
+        slice_set_uint(SLICE, offset, SLICE_BYTE_ORDER_LE, (sizeof(VAR) * 8), (uint64_t)(VAR)); \
+        offset += (uint32_t)(sizeof(VAR));                                                      \
+        if((rc = slice_get_status(SLICE)) != STATUS_OK) {                                       \
+            warn("Error %s setting " #VAR ".", status_to_str);                                  \
+            break;                                                                              \
+        } do{}while(0)
+
+
+// #define GET_FIELD(SLICE, TYPE, ADDR, SIZE)                                                          \
+//         if((rc = slice_get_ ## TYPE ## _le_at_offset((SLICE), offset, (ADDR))) != STATUS_OK) {      \
+//             warn("Unable to get field at offset %"PRIu32"! Error: %s!", offset, status_to_str(rc)); \
+//            break;                                                                                   \
+//         }                                                                                           \
+//         offset += (SIZE)
+
+
+// #define SET_FIELD(SLICE, TYPE, VAL, SIZE)                                                           \
+//         if((rc = slice_set_ ## TYPE ## _le_at_offset((SLICE), offset, (VAL))) != STATUS_OK) {       \
+//             warn("Unable to set field at offset %"PRIu32"! Error: %s!", offset, status_to_str(rc)); \
+//             break;                                                                                  \
+//         }                                                                                           \
+//         offset += (SIZE)
 
 
 

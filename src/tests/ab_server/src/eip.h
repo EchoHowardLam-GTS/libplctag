@@ -38,4 +38,15 @@
 #include "utils/status.h"
 #include "utils/tcp_server.h"
 
-extern status_t eip_process_request(slice_p request, slice_p response, app_connection_data_p app_connection_data, app_data_p app_data);
+typedef enum {
+    EIP_STATUS_SUCCESS = 0x0000,
+    EIP_STATUS_UNSUPPORTED = 0x0001,
+    EIP_STATUS_NO_RESOURCE = 0x0002,
+    EIP_STATUS_BAD_PAYLOAD = 0x0003,
+    EIP_STATUS_BAD_PARAM = 0x0064,
+    EIP_STATUS_OUT_OF_BOUNDS = 0x0065,
+    EIP_STATUS_BAD_VERSION = 0x0069,
+    EIP_STATUS_NOT_ALLOWED = 0x006A,
+} eip_status_t;
+
+extern status_t eip_process_pdu(slice_p pdu, app_connection_data_p app_connection_data, app_data_p app_data);

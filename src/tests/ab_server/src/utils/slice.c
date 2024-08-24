@@ -42,26 +42,12 @@
 #include "util.h"
 
 
-// static status_t fix_up_alignment(char alignment_char, slice_p full_data_slice, slice_p unprocessed_data_slice);
-// static status_t decode_signed_int(const char int_size_char, bool little_endian, bool word_swap, slice_p unprocessed_data, void *dest);
-// static status_t encode_signed_int(const char int_size_char, bool little_endian, bool word_swap, va_list va, slice_p unprocessed_data);
-// static status_t decode_unsigned_int(const char int_size_char, bool little_endian, bool word_swap, slice_p unprocessed_data, void *data);
-// static status_t encode_unsigned_int(const char int_size_char, bool little_endian, bool word_swap, va_list va, slice_p unprocessed_data);
-// static status_t encode_unsigned_int_impl(const char int_size_char, bool little_endian, bool word_swap, slice_p unprocessed_data, uint64_t val_arg);
-// static status_t decode_float(const char int_size_char, bool little_endian, bool word_swap, slice_p unprocessed_data, void *data);
-// static status_t encode_float(const char int_size_char, bool little_endian, bool word_swap, va_list va, slice_p unprocessed_data);
-// static status_t decode_counted_byte_string(const char int_size_char, bool little_endian, bool word_swap, uint32_t multiplier, slice_p unprocessed_data, slice_p dest);
-// static status_t encode_counted_byte_string(const char int_size_char, bool little_endian, bool word_swap, bool byte_swap, uint32_t multiplier, slice_p unused_data_slice, slice_p src);
-// static status_t decode_terminated_byte_string(slice_p fmt_slice, slice_p unprocessed_data, slice_p dest);
-// static status_t encode_terminated_byte_string(slice_p fmt_slice, bool byte_swap, slice_p unused_data_slice, slice_p src);
-// static status_t check_or_allocate(slice_p slice, uint32_t required_size);
-// uint32_t *get_byte_order(size_t size, bool little_endian, bool word_swap);
-
-
 
 bool slice_init_parent(slice_p parent, uint8_t *data, uint32_t data_len)
 {
     status_t rc = STATUS_OK;
+
+    detail("Starting.");
 
     do {
         if(!parent || !data) {
@@ -84,7 +70,9 @@ bool slice_init_parent(slice_p parent, uint8_t *data, uint32_t data_len)
         parent->status = rc;
     }
 
-    return (rc == STATUS_OK ? true : false);
+    detail("Done with status %s.", status_to_str(rc));
+
+    return (rc == STATUS_OK);
 }
 
 
@@ -92,6 +80,8 @@ bool slice_init_parent(slice_p parent, uint8_t *data, uint32_t data_len)
 bool slice_init_child(slice_p child, slice_p parent)
 {
     status_t rc = STATUS_OK;
+
+    detail("Starting.");
 
     do {
         if(!child || !parent) {
@@ -109,7 +99,9 @@ bool slice_init_child(slice_p child, slice_p parent)
         child->status = rc;
     }
 
-    return (rc == STATUS_OK ? true : false);
+    detail("Done with status %s.", status_to_str(rc));
+
+    return (rc == STATUS_OK);
 }
 
 
@@ -119,6 +111,8 @@ bool slice_init_child(slice_p child, slice_p parent)
 bool slice_set_start(slice_p slice, uint32_t possible_offset)
 {
     status_t rc = STATUS_OK;
+
+    detail("Starting.");
 
     do {
         uint32_t offset = possible_offset;
@@ -145,13 +139,17 @@ bool slice_set_start(slice_p slice, uint32_t possible_offset)
         slice->status = rc;
     }
 
-    return (rc == STATUS_OK ? true : false);
+    detail("Done with status %s.", status_to_str(rc));
+
+    return (rc == STATUS_OK);
 }
 
 
-bool slice_set_start_delta(slice_p slice, bool clamp, int32_t start_delta)
+bool slice_set_start_delta(slice_p slice, int32_t start_delta)
 {
     status_t rc = STATUS_OK;
+
+    detail("Starting.");
 
     do {
         int64_t new_start = 0;
@@ -180,7 +178,9 @@ bool slice_set_start_delta(slice_p slice, bool clamp, int32_t start_delta)
         slice->status = rc;
     }
 
-    return (rc == STATUS_OK ? true : false);
+    detail("Done with status %s.", status_to_str(rc));
+
+    return (rc == STATUS_OK);
 }
 
 
@@ -188,6 +188,8 @@ bool slice_set_start_delta(slice_p slice, bool clamp, int32_t start_delta)
 bool slice_set_end(slice_p slice, uint32_t possible_offset)
 {
     status_t rc = STATUS_OK;
+
+    detail("Starting.");
 
     do {
         uint32_t offset = possible_offset;
@@ -214,13 +216,17 @@ bool slice_set_end(slice_p slice, uint32_t possible_offset)
         slice->status = rc;
     }
 
-    return (rc == STATUS_OK ? true : false);
+    detail("Done with status %s.", status_to_str(rc));
+
+    return (rc == STATUS_OK);
 }
 
 
 bool slice_set_end_delta(slice_p slice, int32_t end_delta)
 {
     status_t rc = STATUS_OK;
+
+    detail("Starting.");
 
     do {
         int64_t new_end = 0;
@@ -249,13 +255,17 @@ bool slice_set_end_delta(slice_p slice, int32_t end_delta)
         slice->status = rc;
     }
 
-    return (rc == STATUS_OK ? true : false);
+    detail("Done with status %s.", status_to_str(rc));
+
+    return (rc == STATUS_OK);
 }
 
 
 bool slice_set_len(slice_p slice, uint32_t new_len)
 {
     status_t rc = STATUS_OK;
+
+    detail("Starting.");
 
     do {
         uint64_t new_end = 0;
@@ -277,141 +287,18 @@ bool slice_set_len(slice_p slice, uint32_t new_len)
         slice->status = rc;
     }
 
-    return (rc == STATUS_OK ? true : false);
+    detail("Done with status %s.", status_to_str(rc));
+
+    return (rc == STATUS_OK);
 }
 
 
 
 
-bool slice_to_string(slice_p slice, char *result, uint32_t result_size, bool byte_swap)
-{
-    status_t rc = STATUS_OK;
-    uint32_t slice_length = 0;
-    uint32_t str_length_required = 0;
 
-    do {
-        if(!slice) {
-            warn("Slice pointer must not be NULL!");
-            rc =  STATUS_NULL_PTR;
-            break;
-        }
-
-        if(!result) {
-            warn("Result pointer must not be NULL!");
-            rc =  STATUS_NULL_PTR;
-            break;
-        }
-
-        slice_length = slice_get_len(slice);
-        if(slice_length == SLICE_LEN_ERROR) {
-            warn("Error getting slice length!");
-            rc = STATUS_INTERNAL_FAILURE;
-            break;
-        }
-
-        /* if the raw data is byteswapped, we must have an even number of bytes. */
-        if(byte_swap && (slice_length & 0x01)) {
-            warn("Byteswapped string data must be even in length!");
-            rc = STATUS_BAD_INPUT;
-            break;
-        }
-
-        str_length_required += slice_length + 1; /* +1 for the nul terminator */
-
-        if(str_length_required > result_size) {
-            warn("Slice contains more data than can fit in the string buffer!");
-            rc = STATUS_OUT_OF_BOUNDS;
-            break;
-        }
-
-        for(uint32_t i=0; i < result_size; i++) {
-            uint32_t index = i;
-
-            if(! byte_swap) {
-                index = i;
-            } else {
-                index = (i & 0x01) ? (i - 1) : (i + 1);
-            }
-
-            if(i < slice_length) {
-                result[i] = *(char *)(slice->start + index);
-            } else {
-                result[i] = 0;
-            }
-        }
-    } while(0);
-
-    if(slice) {
-        slice->status = rc;
-    }
-
-    return (rc == STATUS_OK ? true : false);
-}
-
-
-bool string_to_slice(const char *source, slice_p dest, bool byte_swap)
-{
-    status_t rc = STATUS_OK;
-    uint32_t slice_length = 0;
-    uint32_t slice_length_required = 0;
-    uint32_t str_length = 0;
-
-    do {
-        if(!source) {
-            warn("Source pointer must not be NULL!");
-            rc =  STATUS_NULL_PTR;
-            break;
-        }
-
-        str_length = strlen(source);
-
-        if(!dest) {
-            warn("Slice pointer must not be NULL!");
-            rc =  STATUS_NULL_PTR;
-            break;
-        }
-
-        slice_length = slice_get_len(dest);
-
-        slice_length_required = str_length;
-
-        /* if we are byte swapping we need to have an even number of bytes */
-        if(byte_swap && (slice_length_required & 0x01)) {
-            slice_length_required += 1;
-        }
-
-        if(slice_length_required > slice_get_len(dest)) {
-            warn("Insufficient space in the destination slice!");
-            rc = STATUS_OUT_OF_BOUNDS;
-            break;
-        }
-
-        for(uint32_t i=0; i < slice_length_required; i++) {
-            uint32_t index = i;
-
-            if(! byte_swap) {
-                index = i;
-            } else {
-                index = (i & 0x01) ? (i - 1) : (i + 1);
-            }
-
-            if(i < str_length) {
-                *(char *)(dest->start + index) = source[i];
-            } else {
-                /* zero pad if we need to */
-                *(char *)(dest->start + index) = 0;
-            }
-        }
-
-        rc = (slice_set_len(dest, slice_length_required)) ? dest->status : STATUS_OK;
-    } while(0);
-
-    if(dest) {
-        dest->status = rc;
-    }
-
-    return (rc == STATUS_OK ? true : false);
-}
+/*
+ *  Data Accessors
+ */
 
 uint8_t byte_order_8[] = { 8, 0 };
 
@@ -433,6 +320,8 @@ static uint8_t *get_byte_order_array(slice_byte_order_t byte_order, uint8_t num_
 {
     uint8_t *result = NULL;
 
+    detail("Starting.");
+
     switch(num_bits) {
         case 8:
             result = byte_order_8;
@@ -440,12 +329,12 @@ static uint8_t *get_byte_order_array(slice_byte_order_t byte_order, uint8_t num_
 
         case 16:
             switch(byte_order) {
-                case (SLICE_BYTE_ORDER_LE | SLICE_BYTE_ORDER_WORD_SWAP):
+                case SLICE_BYTE_ORDER_LE_WORD_SWAP:
                 case SLICE_BYTE_ORDER_LE:
                     result = byte_order_16_le;
                     break;
 
-                case (SLICE_BYTE_ORDER_BE | SLICE_BYTE_ORDER_WORD_SWAP):
+                case SLICE_BYTE_ORDER_BE_WORD_SWAP:
                 case SLICE_BYTE_ORDER_BE:
                     result = byte_order_16_be;
                     break;
@@ -462,7 +351,7 @@ static uint8_t *get_byte_order_array(slice_byte_order_t byte_order, uint8_t num_
                     result = byte_order_32_le;
                     break;
 
-                case (SLICE_BYTE_ORDER_LE | SLICE_BYTE_ORDER_WORD_SWAP):
+                case SLICE_BYTE_ORDER_LE_WORD_SWAP:
                     result = byte_order_32_le_swapped;
                     break;
 
@@ -470,7 +359,7 @@ static uint8_t *get_byte_order_array(slice_byte_order_t byte_order, uint8_t num_
                     result = byte_order_32_be;
                     break;
 
-                case (SLICE_BYTE_ORDER_BE | SLICE_BYTE_ORDER_WORD_SWAP):
+                case SLICE_BYTE_ORDER_BE_WORD_SWAP:
                     result = byte_order_32_be_swapped;
                     break;
 
@@ -486,7 +375,7 @@ static uint8_t *get_byte_order_array(slice_byte_order_t byte_order, uint8_t num_
                     result = byte_order_64_le;
                     break;
 
-                case (SLICE_BYTE_ORDER_LE | SLICE_BYTE_ORDER_WORD_SWAP):
+                case SLICE_BYTE_ORDER_LE_WORD_SWAP:
                     result = byte_order_64_le_swapped;
                     break;
 
@@ -494,7 +383,7 @@ static uint8_t *get_byte_order_array(slice_byte_order_t byte_order, uint8_t num_
                     result = byte_order_64_be;
                     break;
 
-                case (SLICE_BYTE_ORDER_BE | SLICE_BYTE_ORDER_WORD_SWAP):
+                case SLICE_BYTE_ORDER_BE_WORD_SWAP:
                     result = byte_order_64_be_swapped;
                     break;
 
@@ -509,6 +398,12 @@ static uint8_t *get_byte_order_array(slice_byte_order_t byte_order, uint8_t num_
             break;
     }
 
+    if(result) {
+        detail("Done with valid byte order array.");
+    } else {
+        detail("Done with no matching byte order array!");
+    }
+
     return result;
 }
 
@@ -518,6 +413,8 @@ uint64_t slice_get_uint(slice_p slice, uint32_t offset, slice_byte_order_t byte_
 {
     status_t rc = STATUS_OK;
     uint64_t result = 0;
+
+    detail("Starting.");
 
     do {
         uint32_t num_bytes = num_bits / 8;
@@ -537,6 +434,7 @@ uint64_t slice_get_uint(slice_p slice, uint32_t offset, slice_byte_order_t byte_
 
         switch(num_bits) {
             case 8:
+                /* FIXME - fold this into the loop below. */
                 if(slice_contains_offset(slice, offset)) {
                     result = (uint64_t)(slice->data[offset]);
                 }
@@ -546,7 +444,7 @@ uint64_t slice_get_uint(slice_p slice, uint32_t offset, slice_byte_order_t byte_
             case 32:
             case 64:
                 if(!byte_order_array || num_bits != byte_order_array[0]) {
-                    warn("No byte array or number of bits %"PRIu8" does not equal the byte order array bit check!", num_bits);
+                    warn("No byte array or number of bits %"PRIu8" does not equal the byte order array check entry!", num_bits);
 
                     rc = STATUS_INTERNAL_FAILURE;
 
@@ -574,6 +472,8 @@ uint64_t slice_get_uint(slice_p slice, uint32_t offset, slice_byte_order_t byte_
         slice->status = rc;
     }
 
+    detail("Done with status %s.", status_to_str(rc));
+
     return result;
 }
 
@@ -583,6 +483,8 @@ bool slice_set_uint(slice_p slice, uint32_t offset, slice_byte_order_t byte_orde
 {
     status_t rc = STATUS_OK;
 
+    detail("Starting.");
+
     do {
         uint32_t num_bytes = num_bits / 8;
         uint8_t *byte_order_array = get_byte_order_array(byte_order_type, num_bits);
@@ -590,17 +492,20 @@ bool slice_set_uint(slice_p slice, uint32_t offset, slice_byte_order_t byte_orde
         detail("Getting unsigned it of %"PRIu8" bits from offset %"PRIu32" to offset %"PRIu32".", num_bits, offset, offset + num_bytes);
 
         if(!slice) {
+            warn("The target slice must not be NULL!");
             rc = STATUS_NULL_PTR;
             break;
         }
 
         if(!byte_order_array) {
+            warn("Unable to look up the byte order array!");
             rc = STATUS_BAD_INPUT;
             break;
         }
 
         switch(num_bits) {
             case 8:
+                /* FIXME - add the byte order arrays for 8-bit units and fold this into the loop below. */
                 if(slice_contains_offset(slice, offset)) {
                     slice->data[offset] = (uint8_t)(val & 0xFF);
                 }
@@ -610,7 +515,7 @@ bool slice_set_uint(slice_p slice, uint32_t offset, slice_byte_order_t byte_orde
             case 32:
             case 64:
                 if(!byte_order_array || num_bits != byte_order_array[0]) {
-                    warn("No byte array or number of bits %"PRIu8" does not equal the byte order array bit check!", num_bits);
+                    warn("No byte array or number of bits %"PRIu8" does not equal the byte order array check entry!", num_bits);
 
                     rc = STATUS_INTERNAL_FAILURE;
 
@@ -636,9 +541,76 @@ bool slice_set_uint(slice_p slice, uint32_t offset, slice_byte_order_t byte_orde
         slice->status = rc;
     }
 
+    detail("Done with status %s.", status_to_str(rc));
+
     return (rc == STATUS_OK);
 }
 
+
+double slice_get_float(slice_p slice, uint32_t offset, slice_byte_order_t byte_order, uint8_t num_bits)
+{
+    double d_result = 0.0;
+
+    detail("Starting.");
+
+    do {
+        uint64_t u_result = 0;
+
+        if(!slice) {
+            break;
+        }
+
+        if(num_bits != 32 || num_bits != 64) {
+            warn("Only 32 and 64-bit floats are supported.");
+            slice->status = STATUS_NOT_SUPPORTED;
+            break;
+        }
+
+        u_result = slice_get_uint(slice, offset, byte_order, num_bits);
+
+        memcpy(&d_result, &u_result, sizeof(d_result));
+    } while(0);
+
+    detail("Done with status %s.", status_to_str(slice_get_status(slice)));
+
+    return d_result;
+}
+
+
+
+bool slice_set_float(slice_p slice, uint32_t offset, slice_byte_order_t byte_order, uint8_t num_bits, double val)
+{
+    status_t rc = STATUS_OK;
+
+    do {
+        uint64_t u_val = 0;
+
+        if(!slice) {
+            rc = STATUS_NULL_PTR;
+            break;
+        }
+
+        if(num_bits != 32 || num_bits != 64) {
+            warn("Only 32 and 64-bit floats are supported.");
+            slice->status = STATUS_NOT_SUPPORTED;
+            break;
+        }
+
+        memcpy(&u_val, &val, sizeof(u_val));
+
+        slice_set_uint(slice, offset, byte_order, num_bits, u_val);
+
+        rc = slice_get_status(slice);
+    } while(0);
+
+    if(slice) {
+        slice->status = rc;
+    }
+
+    detail("Done with status %s.", status_to_str(rc));
+
+    return (rc == STATUS_OK);
+}
 
 
 
@@ -646,8 +618,11 @@ bool slice_get_byte_string(slice_p slice, uint32_t byte_str_offset, uint32_t byt
 {
     status_t rc = STATUS_OK;
 
+    detail("Starting.");
+
     do {
         if(!slice || !dest) {
+            warn("The source slice pointer and the destination byte string pointer must not be NULL!");
             rc = STATUS_NULL_PTR;
             break;
         }
@@ -674,6 +649,8 @@ bool slice_get_byte_string(slice_p slice, uint32_t byte_str_offset, uint32_t byt
         slice->status = rc;
     }
 
+    detail("Done with status %s.", status_to_str(rc));
+
     return (rc == STATUS_OK);
 }
 
@@ -683,8 +660,11 @@ bool slice_set_byte_string(slice_p slice, uint32_t byte_str_offset, uint8_t *byt
 {
     status_t rc = STATUS_OK;
 
+    detail("Starting.");
+
     do {
         if(!slice || !byte_str_src) {
+            warn("Destination slice and byte string pointer must not be NULL!");
             rc = STATUS_NULL_PTR;
             break;
         }
@@ -710,6 +690,8 @@ bool slice_set_byte_string(slice_p slice, uint32_t byte_str_offset, uint8_t *byt
     if(slice) {
         slice->status = rc;
     }
+
+    detail("Done with status %s.", status_to_str(rc));
 
     return (rc == STATUS_OK);
 }

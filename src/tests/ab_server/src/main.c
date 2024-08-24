@@ -164,7 +164,7 @@ int main(int argc, const char **argv)
     server_config.buffer_size = MAX_DEVICE_BUFFER_SIZE;
     server_config.clean_up_app_connection_data = clean_up_plc_connection_data;
     server_config.init_app_connection_data = init_plc_connection_data;
-    server_config.process_request = eip_process_request;
+    server_config.process_request = eip_process_pdu;
     server_config.program_terminating = program_terminating;
     server_config.terminate_program = terminate_program;
 
@@ -229,7 +229,7 @@ status_t init_plc_connection_data(app_connection_data_p app_connection_data, app
     // connection->tcp_connection.request_buffer.end = &(connection->pdu_data_buffer) + MAX_DEVICE_BUFFER_SIZE;
     // connection->tcp_connection.response_buffer.start = &(connection->pdu_data_buffer);
     // connection->tcp_connection.response_buffer.end = &(connection->pdu_data_buffer) + MAX_DEVICE_BUFFER_SIZE;
-    // connection->tcp_connection.handler = eip_process_request;
+    // connection->tcp_connection.handler = eip_process_pdu;
 
     return STATUS_OK;
 }

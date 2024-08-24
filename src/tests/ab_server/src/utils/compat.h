@@ -52,15 +52,18 @@
     #define str_cmp_i(first, second) _stricmp(first, second)
     #define strdup _strdup
     #define str_scanf sscanf_s
+    #define TYPEOF(X) __typeof__(X)
 #else
     #define str_cmp_i(first, second) strcasecmp(first, second)
     #define str_scanf sscanf
+    #define TYPEOF(X) typeof(X)
 #endif
 
 /* Define ssize_t */
 #ifdef IS_MSVC
     #include <BaseTsd.h>
     typedef SSIZE_T ssize_t;
+
 #else
     #include <sys/types.h>
 #endif

@@ -185,11 +185,20 @@ THREAD_FUNC(connection_handler, connection_ptr_arg)
         /* reset the buffers */
         detail("Resetting request and response buffers.");
 
-        /* set the start and end to zero.  The processing routine will ask for specific amounts of data. */
-        if(!slice_init_child(&pdu, &(connection->buffer), 0, 0)) {
+        /* reinitialize the PDU slice as a child of the main buffer. */
+        if(!slice_init_child(&pdu, &(connection->buffer))) {
             rc = slice_get_status(&pdu);
             if(rc != STATUS_OK) {
                 warn("Unable to initialize the PDU buffer, error %s!", status_to_str(rc));
+                break;
+            }
+        }
+
+        /* reset the length to zero. */
+        if(!slice_set_len(&pdu, 0)) {
+            rc = slice_get_status(&pdu);
+            if(rc != STATUS_OK) {
+                warn("Unable to set the PDU buffer length, error %s!", status_to_str(rc));
                 break;
             }
         }

@@ -40,9 +40,7 @@ typedef enum {
     STATUS_PENDING,
     STATUS_TERMINATE,
     STATUS_WOULD_BLOCK,
-
-    /* warnings */
-    STATUS_NOT_FOUND = 1000,
+    STATUS_NOT_FOUND,
     STATUS_NOT_RECOGNIZED,
     STATUS_NOT_SUPPORTED,
     STATUS_BAD_INPUT,
@@ -57,9 +55,6 @@ typedef enum {
     STATUS_INTERNAL_FAILURE,
     STATUS_EXTERNAL_FAILURE,
     STATUS_NOT_ALLOWED,
-
-    /* makes any warning an error, gnerally not recoverable */
-    STATUS_ERROR = 1000,
 } status_t;
 
 

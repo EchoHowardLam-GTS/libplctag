@@ -53,9 +53,6 @@ typedef enum {
     SOCKET_EVENT_READ = (1 << 0),
     SOCKET_EVENT_WRITE = (1 << 1),
     SOCKET_EVENT_ACCEPT = (1 << 2),
-
-    SOCKET_EVENT_TIMEOUT = (1 << 8),
-
 } socket_event_t;
 
 /* return STATUS_NOT_FOUND if the socket is closed. */

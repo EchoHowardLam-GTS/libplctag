@@ -140,12 +140,13 @@ status_t socket_event_wait(SOCKET sock, socket_event_t events_wanted, socket_eve
         struct timeval timeout;
         int result = 0;
         int option = 0;
+        socklen_t option_size = sizeof(option);
         bool read_event = (events_wanted & SOCKET_EVENT_READ) ? true : false;
         bool write_event = (events_wanted & SOCKET_EVENT_WRITE) ? true : false;
         bool accept_event = (events_wanted & SOCKET_EVENT_ACCEPT) ? true : false;
 
         /* what kind of socket is this? */
-        result = getsockopt(sock, SOL_SOCKET, SO_ACCEPTCONN, &option, sizeof(option));
+        result = getsockopt(sock, SOL_SOCKET, SO_ACCEPTCONN, &option, &option_size);
         if(result == 0) {
             if(option != 0) {
                 /* this is a listening socket */
@@ -530,7 +531,7 @@ status_t socket_write(int sock, slice_p data)
     int write_amt = 0;
 
     info("socket_write(): writing data:");
-    debug_dump_ptr(DEBUG_INFO, data->start, data->end);
+    debug_dump_ptr(DEBUG_INFO, slice_get_start_ptr(data), slice_get_end_ptr(data));
 
     do {
         uint32_t slice_len = slice_get_len(data);
@@ -546,7 +547,7 @@ status_t socket_write(int sock, slice_p data)
             break;
         }
 
-        write_amt = (int)write(sock, data->start, (size_t)slice_get_len(data));
+        write_amt = (int)write(sock, slice_get_start_ptr(data), (size_t)slice_get_len(data));
 
         if(write_amt > 0) {
             uint32_t slice_len = 0;

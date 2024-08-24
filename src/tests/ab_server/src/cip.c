@@ -203,7 +203,7 @@ status_t decode_pdu(slice_p request, cip_pdu_p pdu)
         }
 
         info("Processing CIP PDU with EPATH:");
-        debug_dump_ptr(DEBUG_INFO, pdu->epath.start, pdu->epath.end);
+        debug_dump_ptr(DEBUG_INFO, slice_get_start_ptr(&pdu->epath), slice_get_end_ptr(&pdu->epath));
 
         info("Processing CIP PDU with payload:");
         debug_dump_ptr(DEBUG_INFO, pdu->payload.start, pdu->payload.end);
@@ -250,7 +250,7 @@ status_t process_forward_open(slice_p request, slice_p response, plc_connection_
 
 
     info("Checking Forward Open request:");
-    debug_dump_ptr(DEBUG_INFO, request->start, request->end);
+    debug_dump_ptr(DEBUG_INFO, slice_get_start_ptr(request), slice_get_end_ptr(request));
 
     do {
         /* save the start of the request for later */

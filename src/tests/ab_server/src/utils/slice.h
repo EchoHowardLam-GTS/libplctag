@@ -62,8 +62,8 @@ typedef slice_t *slice_p;
 
 
 
-extern bool slice_init_parent(slice_p slice, uint8_t *data, uint32_t data_len);
-extern bool slice_init_child(slice_p slice, slice_p parent, uint32_t start_offset, uint32_t end_offset);
+extern bool slice_init_parent(slice_p parent, uint8_t *data, uint32_t data_len);
+extern bool slice_init_child(slice_p child, slice_p parent);
 
 static inline uint32_t slice_get_start(slice_p slice)
 {
@@ -75,8 +75,8 @@ static inline uint8_t *slice_get_start_ptr(slice_p slice)
     return (slice ? (slice->data + slice->start) : NULL);
 }
 
-extern status_t slice_set_start(slice_p slice, uint32_t start_abs);
-extern status_t slice_set_start_delta(slice_p slice, int32_t start_delta);
+extern bool slice_set_start(slice_p slice, uint32_t start_abs);
+extern bool slice_set_start_delta(slice_p slice, int32_t start_delta);
 
 static inline uint32_t slice_get_end(slice_p slice)
 {
@@ -88,8 +88,8 @@ static inline uint8_t *slice_get_end_ptr(slice_p slice)
     return (slice ? (slice->data + slice->end) : NULL);
 }
 
-extern status_t slice_set_end(slice_p slice, uint32_t end_abs);
-extern status_t slice_set_end_delta(slice_p slice, int32_t end_delta);
+extern bool slice_set_end(slice_p slice, uint32_t end_abs);
+extern bool slice_set_end_delta(slice_p slice, int32_t end_delta);
 
 static inline status_t slice_get_status(slice_p slice)
 {
@@ -108,6 +108,11 @@ static inline uint32_t slice_get_len(slice_p slice)
 /* The new length is start  + new_len and the end offset is changed */
 extern bool slice_set_len(slice_p slice, uint32_t new_len);
 
+static inline bool slice_set_len_delta(slice_p slice, int32_t delta)
+{
+    return slice_set_end_delta(slice, delta);
+}
+
 
 
 /* does the slice have data at the offset? */
@@ -125,13 +130,14 @@ static inline bool slice_contains_slice(slice_p outer, slice_p inner)
 
 
 /*
- *  Data routines and definitions.
+ *  Data Accessors
  */
 
 typedef enum {
     SLICE_BYTE_ORDER_LE,
     SLICE_BYTE_ORDER_BE,
-    SLICE_BYTE_ORDER_WORD_SWAP = 0x1000,
+    SLICE_BYTE_ORDER_LE_WORD_SWAP,
+    SLICE_BYTE_ORDER_BE_WORD_SWAP,
 } slice_byte_order_t;
 
 
@@ -150,59 +156,9 @@ static inline bool slice_set_int(slice_p slice, uint32_t offset, slice_byte_orde
 
 
 
-static inline double slice_get_float(slice_p slice, uint32_t offset, slice_byte_order_t byte_order, uint8_t num_bits)
-{
-    double d_result = 0.0;
-
-    do {
-        uint64_t u_result = 0;
-
-        if(!slice) {
-            break;
-        }
-
-        if(num_bits != 32 || num_bits != 64) {
-            slice->status = STATUS_NOT_SUPPORTED;
-            break;
-        }
-
-        uint64_t u_result = slice_get_uint(slice, offset, byte_order, num_bits);
-
-        memcpy(&d_result, &u_result, sizeof(d_result));
-    } while(0);
-
-    return d_result;
-}
+extern double slice_get_float(slice_p slice, uint32_t offset, slice_byte_order_t byte_order, uint8_t num_bits);
+extern bool slice_set_float(slice_p slice, uint32_t offset, slice_byte_order_t byte_order, uint8_t num_bits, double val);
 
 
-
-static inline bool slice_set_float(slice_p slice, uint32_t offset, slice_byte_order_t byte_order, uint8_t num_bits, double val)
-{
-    status_t rc = STATUS_OK;
-
-    do {
-        uint64_t u_val = 0;
-
-        if(!slice) {
-            rc = STATUS_NULL_PTR;
-            break;
-        }
-
-        if(num_bits != 32 || num_bits != 64) {
-            slice->status = STATUS_NOT_SUPPORTED;
-            break;
-        }
-
-        memcpy(&u_val, &val, sizeof(u_val));
-
-        slice_set_uint(slice, offset, byte_order, num_bits, u_val);
-
-        rc = slice_get_status(slice);
-    } while(0);
-
-    return (rc == STATUS_OK);
-}
-
-
-extern bool slice_get_byte_string(slice_p slice, uint8_t *dest, uint32_t dest_size, bool byte_swap);
-extern bool slice_set_byte_string(slice_p slice, uint8_t *src, uint32_t src_size, bool byte_swap);
+extern bool slice_get_byte_string(slice_p slice, uint32_t byte_str_offset, uint32_t byte_str_len, uint8_t *dest, bool byte_swap);
+extern bool slice_set_byte_string(slice_p slice, uint32_t byte_str_offset, uint8_t *byte_str_src, uint32_t byte_str_len, bool byte_swap);
