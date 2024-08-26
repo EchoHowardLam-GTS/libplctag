@@ -176,7 +176,7 @@ status_t cpf_dispatch_connected_request(slice_p request, slice_p response, plc_c
             break;
         }
 
-        rc = cip_dispatch_request(&(pdu.request_payload_slice), &(pdu.response_payload_slice), connection);
+        rc = cip_process_pdu(&(pdu.request_payload_slice), &(pdu.response_payload_slice), connection);
         if(rc != STATUS_OK) {
             warn("Unable to dispatch CIP request!");
             break;
@@ -268,7 +268,7 @@ status_t cpf_dispatch_unconnected_request(slice_p request, slice_p response, plc
             break;
         }
 
-        rc = cip_dispatch_request(&request_payload_slice, &response_payload_slice, connection);
+        rc = cip_process_pdu(&request_payload_slice, &response_payload_slice, connection);
         if(rc != STATUS_OK) {
             warn("Unable to dispatch CIP request!");
             break;

@@ -44,24 +44,6 @@
 #include "utils/time_utils.h"
 
 
-// /* tag commands */
-// const uint8_t CIP_MULTI[] = { 0x0A, 0x02, 0x20, 0x02, 0x24, 0x01 };
-// const uint8_t CIP_READ[] = { 0x4C };
-// const uint8_t CIP_WRITE[] = { 0x4D };
-// const uint8_t CIP_RMW[] = { 0x4E, 0x02, 0x20, 0x02, 0x24, 0x01 };
-// const uint8_t CIP_READ_FRAG[] = { 0x52 };
-// const uint8_t CIP_WRITE_FRAG[] = { 0x53 };
-
-
-// /* non-tag commands */
-// //4b 02 20 67 24 01 07 3d f3 45 43 50 21
-// const uint8_t CIP_PCCC_EXECUTE[] = { 0x4B, 0x02, 0x20, 0x67, 0x24, 0x01, 0x07, 0x3d, 0xf3, 0x45, 0x43, 0x50, 0x21 };
-// const uint8_t CIP_FORWARD_CLOSE[] = { 0x4E, 0x02, 0x20, 0x06, 0x24, 0x01 };
-// const uint8_t CIP_FORWARD_OPEN[] = { 0x54, 0x02, 0x20, 0x06, 0x24, 0x01 };
-// const uint8_t CIP_LIST_TAGS[] = { 0x55, 0x02, 0x20, 0x02, 0x24, 0x01 };
-// const uint8_t CIP_FORWARD_OPEN_EX[] = { 0x5B, 0x02, 0x20, 0x06, 0x24, 0x01 };
-
-
 typedef enum {
     CIP_SERVICE_MULTI_REQUEST = 0x0A,
     CIP_SERVICE_PCCC_EXECUTE = 0x4B,
@@ -84,59 +66,65 @@ typedef enum {
 
 #define CIP_SYMBOLIC_SEGMENT_MARKER ((uint8_t)0x91)
 
-typedef struct {
-    uint8_t service_code;   /* why is the operation code _before_ the path? */
-    uint8_t path_size;      /* size in 16-bit words of the path */
-    slice_t path;           /* store this in a slice to avoid copying */
-} cip_header_s;
+// typedef struct {
+//     uint8_t service_code;   /* why is the operation code _before_ the path? */
+//     uint8_t path_size;      /* size in 16-bit words of the path */
+//     slice_t path;           /* store this in a slice to avoid copying */
+// } cip_header_s;
 
-typedef slice_t epath_t;
-typedef epath_t *epath_p;
 
 
 typedef struct {
+    slice_p pdu;
     uint8_t service;
-    epath_t epath;
-    slice_t payload;
-} cip_pdu_t;
+    uint32_t epath_start;
+    uint32_t epath_end;
+} cip_req_t;
 
-typedef cip_pdu_t *cip_pdu_p;
-
-
-
-static status_t decode_pdu(slice_p request, cip_pdu_p pdu);
+typedef cip_req_t *cip_req_p;
 
 
-static status_t process_forward_open(cip_pdu_p pdu, slice_p response, plc_connection_p connection);
-static status_t process_forward_close(slice_p request, slice_p response, plc_connection_p connection);
-static status_t process_tag_read_request(slice_p request, slice_p response, plc_connection_p connection);
-static status_t process_tag_write_request(slice_p request, slice_p response, plc_connection_p connection);
+
+static status_t decode_pdu(slice_p pdu, cip_req_p cip_req);
 
 
-static status_t process_tag_segment(tcp_connection_p connection, tag_def_t **tag);
-static status_t process_tag_dim_segment(slice_p tag_path, tag_def_t *tag);
+static status_t process_forward_open(cip_req_p cip_req, uint32_t pdu_start, plc_connection_p connection);
+// static status_t process_forward_close(slice_p pdu, plc_connection_p connection);
+// static status_t process_tag_read_request(slice_p pdu, plc_connection_p connection);
+// static status_t process_tag_write_request(slice_p pdu, plc_connection_p connection);
+
+
+// static status_t process_tag_segment(tcp_connection_p connection, tag_def_t **tag);
+// static status_t process_tag_dim_segment(slice_p tag_path, tag_def_t *tag);
 static bool make_cip_error(slice_p response, uint8_t cip_cmd, uint8_t cip_err, bool extend, uint16_t extended_error);
-static int match_path(slice_p request, bool need_pad, uint8_t *path, uint8_t path_len);
+static int match_path(slice_p pdu, bool need_pad, uint8_t *path, uint8_t path_len);
 
 
 
-status_t cip_dispatch_request(slice_p request, slice_p response, plc_connection_p connection)
+status_t cip_process_pdu(slice_p pdu, plc_connection_p connection)
 {
     status_t rc = STATUS_OK;
-    cip_pdu_t pdu;
+    cip_req_t cip_req;
+    uint32_t pdu_start = 0;
 
     info("Got CIP request:");
-    debug_dump_ptr(DEBUG_INFO, slice_get_start_ptr(request), slice_get_end_ptr(request));
+    debug_dump_ptr(DEBUG_INFO, slice_get_start_ptr(pdu), slice_get_end_ptr(pdu));
 
     do {
+        pdu_start = slice_get_start(pdu);
+        if((rc = slice_get_status(pdu)) != STATUS_OK) {
+            warn("Error %s trying to get PDU start index!");
+            break;
+        }
+
         /* decode the PUD into service, epath, and payload chunks */
-        rc = decode_pdu(request, &pdu);
+        rc = decode_pdu(pdu, &cip_req);
         if(rc != STATUS_OK) {
             warn("Got error %s splitting the CIP PDU into chunks!", status_to_str(rc));
             break;
         }
 
-        switch(pdu.service) {
+        switch(cip_req.service) {
             case CIP_SERVICE_MULTI_REQUEST: rc = STATUS_NOT_SUPPORTED; break;
 
             case CIP_SERVICE_PCCC_EXECUTE: rc = STATUS_NOT_SUPPORTED; break;
@@ -145,7 +133,7 @@ status_t cip_dispatch_request(slice_p request, slice_p response, plc_connection_
 
             case CIP_SERVICE_WRITE_TAG: rc = STATUS_NOT_SUPPORTED; break;
 
-            case CIP_SERVICE_FORWARD_CLOSE:     /* DUPE !*/
+            case CIP_SERVICE_FORWARD_CLOSE:  rc = STATUS_NOT_SUPPORTED; break;   /* DUPE !*/
 
 
             // case CIP_SERVICE_RMW_TAG:        /* DUPE ! */
@@ -154,7 +142,7 @@ status_t cip_dispatch_request(slice_p request, slice_p response, plc_connection_
 
             case CIP_SERVICE_WRITE_TAG_FRAG: rc = STATUS_NOT_SUPPORTED; break;
 
-            case CIP_SERVICE_FORWARD_OPEN: rc = process_forward_open(&pdu, response, connection);
+            case CIP_SERVICE_FORWARD_OPEN: rc = process_forward_open(&pdu, pdu_start, connection); break;
 
             case CIP_SERVICE_FORWARD_OPEN_EX:
 
@@ -162,45 +150,53 @@ status_t cip_dispatch_request(slice_p request, slice_p response, plc_connection_
 
             default: rc = STATUS_NOT_RECOGNIZED; break;
         }
-
-        /* handle case where we have unimplemented services */
-        if(rc == STATUS_NOT_RECOGNIZED || rc == STATUS_NOT_SUPPORTED) {
-            rc = make_cip_error(response, pdu.service, CIP_ERR_UNSUPPORTED, false, 0);
-        }
-
-        if(rc == STATUS_)
     } while(0);
+
+    /* handle case where we have unimplemented services */
+    if(rc != STATUS_OK) {
+        rc = make_cip_error(pdu, cip_req.service, CIP_ERR_UNSUPPORTED, false, 0);
+    }
 
     return rc;
 }
 
 
 
-status_t decode_pdu(slice_p request, cip_pdu_p pdu)
+status_t decode_pdu(slice_p pdu, cip_req_p cip_req)
 {
     status_t rc = STATUS_OK;
 
     do {
+        uint32_t pdu_start = 0;
         uint32_t offset = 0;
         uint8_t epath_word_length = 0;
         uint16_t epath_byte_length = 0;
+        uint32_t epath_start = 0;
+        uint32_t epath_end = 0;
         slice_t service_header = {0};
 
+        pdu_start = slice_get_start(pdu);
+        if((rc = slice_get_status(pdu)) != STATUS_OK) {
+            warn("Error %s getting PDU start index!");
+            break;
+        }
+
         /* get the service byte */
-        GET_FIELD(request, u8, &(pdu->service), sizeof(pdu->service));
+        GET_UINT_FIELD(pdu, cip_req->service);
 
         /* get the EPATH length in words */
-        GET_FIELD(request, u8, &epath_word_length, sizeof(epath_word_length));
+        GET_UINT_FIELD(pdu, epath_word_length);
+
+        cip_req->epath_start = offset;
 
         /* calculate the actual length of the epath in bytes. */
         epath_byte_length = 2 * epath_word_length;
 
-        /* split the request slice into pieces */
-        rc = slice_split_middle_at_offsets(request, offset, offset + epath_byte_length, NULL, &(pdu->epath), &(pdu->payload));
-        if(rc != STATUS_OK) {
-            warn("Unable to split the request into EPATH and payload slices, got error %s!", status_to_str(rc));
-            break;
-        }
+        cip_req->epath_end = cip_req->epath_start + epath_byte_length;
+
+        info("CIP request service %x.", cip_req->service);
+        info("CIP EPATH:")
+        debug_dump_ptr(DEBUG_INFO, slice_get_start_ptr(cip_req->pdu)+(cip->req->epath_end - cip_req->epath_start))
 
         info("Processing CIP PDU with EPATH:");
         debug_dump_ptr(DEBUG_INFO, slice_get_start_ptr(&pdu->epath), slice_get_end_ptr(&pdu->epath));
@@ -238,7 +234,7 @@ typedef struct {
 #define CIP_FORWARD_OPEN_EX_MIN_SIZE   (46)
 
 
-status_t process_forward_open(slice_p request, slice_p response, plc_connection_p connection)
+status_t process_forward_open(cip_req_p cip_req, uint32_t pdu_start, plc_connection_p connection)
 {
     status_t rc = STATUS_OK;
     status_t slice_rc = STATUS_OK;
@@ -250,11 +246,14 @@ status_t process_forward_open(slice_p request, slice_p response, plc_connection_
 
 
     info("Checking Forward Open request:");
-    debug_dump_ptr(DEBUG_INFO, slice_get_start_ptr(request), slice_get_end_ptr(request));
+    debug_dump_ptr(DEBUG_INFO, slice_get_start_ptr(cip_req->payload), slice_get_end_ptr(cip_req->payload));
 
     do {
-        /* save the start of the request for later */
-        saved_request_start = request->start;
+
+        /* decode the PDU */
+        forward_open.service = cip_req->service;
+
+        GET_UINT_FIELD(cip_req->payload, forward_open.)
 
         slice_rc = slice_unpack(request, "&u1", &forward_open.forward_open_service);
 
@@ -395,7 +394,7 @@ typedef struct {
 int process_forward_close(tcp_connection_p connection)
 {
     int rc = CIP_OK;
-    slice_p request = &(client->request);
+    slice_p pdu = &(client->request);
     slice_p response = &(client->response);
     // buf_t conn_path;
     forward_close_s fc_req = {0};
@@ -505,7 +504,7 @@ int process_forward_close(tcp_connection_p connection)
 int process_tag_read_request(tcp_connection_p connection)
 {
     int rc = CIP_OK;
-    slice_p request = &(client->request);
+    slice_p pdu = &(client->request);
     slice_p response = &(client->response);
     uint16_t cip_start_offset = 0;
     uint16_t cip_req_size = 0;
@@ -677,7 +676,7 @@ int process_tag_read_request(tcp_connection_p connection)
 int process_tag_write_request(tcp_connection_p connection)
 {
     int rc = CIP_OK;
-    slice_p request = &(client->request);
+    slice_p pdu = &(client->request);
     slice_p response = &(client->response);
     uint8_t write_cmd = 0;
     uint8_t tag_segment_size = 0;
@@ -802,7 +801,7 @@ int process_tag_write_request(tcp_connection_p connection)
 status_t process_tag_segment(tcp_connection_p connection, tag_def_t **tag)
 {
     int rc = CIP_OK;
-    slice_p request = &(client->request);
+    slice_p pdu = &(client->request);
     uint8_t segment_type = 0;
     uint8_t name_len = 0;
     size_t dimensions[3] = { 0, 0, 0};
@@ -1059,7 +1058,7 @@ status_t process_tag_dim_segment(slice_p tag_path, tag_def_t *tag)
 
 
 /* match a path.   This is tricky, thanks, Rockwell. */
-int match_path(slice_p request, bool need_pad, uint8_t *path, uint8_t path_len)
+int match_path(slice_p pdu, bool need_pad, uint8_t *path, uint8_t path_len)
 {
     uint8_t input_path_len = 0;
 

@@ -56,4 +56,4 @@ enum {
 };
 
 
-extern status_t cip_dispatch_request(slice_p request, slice_p response, plc_connection_p connection);
+extern status_t cip_process_pdu(slice_p pdu, plc_connection_p connection);
