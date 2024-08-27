@@ -162,6 +162,143 @@ extern status_t init_plc_connection_data(app_connection_data_p app_connection_da
 
 
 
+#ifdef IS_WINDOWS
+    #ifdef _MSC_VER
+        /* MS Visual Studio C compiler. */
+        #define START_PACK __pragma( pack(push, 1) )
+        #define END_PACK   __pragma( pack(pop) )
+        #define __PRETTY_FUNCTION__ __FUNCTION__
+    #else
+        /* MinGW on Windows. */
+        #define START_PACK
+        #define END_PACK  __attribute__((packed))
+        #define __PRETTY_FUNCTION__  __func__
+    #endif
+#else
+    /* GCC, Clang */
+    #define START_PACK
+    #define END_PACK  __attribute__((packed))
+    #define __PRETTY_FUNCTION__  __func__
+#endif
+
+
+START_PACK typedef struct {
+    union {
+        uint8_t b_val[2];
+        uint16_t u_val;
+    } val;
+} END_PACK uint16_le;
+
+
+START_PACK typedef struct {
+    union {
+        uint8_t b_val[4];
+        uint32_t u_val;
+    } val;
+} END_PACK uint32_le;
+
+
+
+START_PACK typedef struct {
+    union {
+        uint8_t b_val[8];
+        uint64_t u_val;
+    } val;
+} END_PACK uint64_le;
+
+
+
+
+inline static uint16_le h2le16(uint16_t val)
+{
+    uint16_le result;
+
+    result.val.b_val[0] = (uint8_t)(val & 0xFF);
+    result.val.b_val[1] = (uint8_t)((val >> 8) & 0xFF);
+
+    return result;
+}
+
+
+inline static uint16_t le2h16(uint16_le src)
+{
+    uint16_t result = 0;
+
+    result = (uint16_t)(src.val.b_val[0] + ((src.val.b_val[1]) << 8));
+
+    return result;
+}
+
+
+
+
+inline static uint32_le h2le32(uint32_t val)
+{
+    uint32_le result;
+
+    result.val.b_val[0] = (uint8_t)(val & 0xFF);
+    result.val.b_val[1] = (uint8_t)((val >> 8) & 0xFF);
+    result.val.b_val[2] = (uint8_t)((val >> 16) & 0xFF);
+    result.val.b_val[3] = (uint8_t)((val >> 24) & 0xFF);
+
+    return result;
+}
+
+
+inline static uint32_t le2h32(uint32_le src)
+{
+    uint32_t result = 0;
+
+    result |= (uint32_t)(src.val.b_val[0]);
+    result |= ((uint32_t)(src.val.b_val[1]) << 8);
+    result |= ((uint32_t)(src.val.b_val[2]) << 16);
+    result |= ((uint32_t)(src.val.b_val[3]) << 24);
+
+    return result;
+}
+
+
+
+
+
+
+inline static uint64_le h2le64(uint64_t val)
+{
+    uint64_le result;
+
+    result.val.b_val[0] = (uint8_t)(val & 0xFF);
+    result.val.b_val[1] = (uint8_t)((val >> 8) & 0xFF);
+    result.val.b_val[2] = (uint8_t)((val >> 16) & 0xFF);
+    result.val.b_val[3] = (uint8_t)((val >> 24) & 0xFF);
+    result.val.b_val[4] = (uint8_t)((val >> 32) & 0xFF);
+    result.val.b_val[5] = (uint8_t)((val >> 40) & 0xFF);
+    result.val.b_val[6] = (uint8_t)((val >> 48) & 0xFF);
+    result.val.b_val[7] = (uint8_t)((val >> 56) & 0xFF);
+
+    return result;
+}
+
+
+inline static uint64_t le2h64(uint64_le src)
+{
+    uint64_t result = 0;
+
+    result |= (uint64_t)(src.val.b_val[0]);
+    result |= ((uint64_t)(src.val.b_val[1]) << 8);
+    result |= ((uint64_t)(src.val.b_val[2]) << 16);
+    result |= ((uint64_t)(src.val.b_val[3]) << 24);
+    result |= ((uint64_t)(src.val.b_val[4]) << 32);
+    result |= ((uint64_t)(src.val.b_val[5]) << 40);
+    result |= ((uint64_t)(src.val.b_val[6]) << 48);
+    result |= ((uint64_t)(src.val.b_val[7]) << 56);
+
+    return result;
+}
+
+
+
+
+
 #define GET_UINT_FIELD(SLICE, VAR)                                                                  \
         (VAR) = (TYPEOF(VAR))slice_get_uint(SLICE, offset, SLICE_BYTE_ORDER_LE, (sizeof(VAR) * 8)); \
         offset += (uint32_t)(sizeof(VAR));                                                          \

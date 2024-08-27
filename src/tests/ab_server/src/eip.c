@@ -61,96 +61,90 @@ const uint16_t EIP_REGISTER_SESSION_SIZE  = ((uint16_t)4); /* 4 bytes, 2 16-bit 
 
 
 
-typedef struct {
-    uint16_t command;
-    uint16_t length;
-    uint32_t session_handle;
-    uint32_t status;
-    uint64_t sender_context;
-    uint32_t options;
-} eip_header_t;
-
-typedef eip_header_t *eip_header_p;
+// static status_t encode_eip_error_pdu(slice_p pdu, eip_header_p header, status_t status);
+// static eip_status_t translate_to_eip_status(status_t status);
 
 
+static status_t decode_eip_header(slice_p encoded_pdu_data, eip_pdu_p decoded_pdu, plc_connection_p connection);
 
 
-static status_t encode_eip_error_pdu(slice_p pdu, eip_header_p header, status_t status);
-static eip_status_t translate_to_eip_status(status_t status);
-
-
-static status_t decode_eip_pdu(slice_p pdu, eip_header_p header);
-static status_t encode_eip_header(slice_p pdu, eip_header_p header);
+static status_t encode_eip_header(slice_p encoded_pdu_data, eip_pdu_p decoded_pdu, plc_connection_p connection);
 // static status_t reserve_eip_pdu(slice_p response, slice_p pdu_header_slice, slice_p eip_header_p);
 
 
 
 
-static status_t register_session(slice_p pdu, plc_connection_p connection);
-static status_t unregister_session(slice_p pdu, plc_connection_p connection);
+static status_t process_register_session_request(slice_p encoded_pdu_data, eip_pdu_p decoded_pdu, plc_connection_p connection);
+static status_t process_unregister_session_request(slice_p encoded_pdu_data, eip_pdu_p decoded_pdu, plc_connection_p connection);
 
 
-status_t eip_process_pdu(slice_p pdu, app_connection_data_p app_connection_data, app_data_p app_data)
+
+
+
+status_t eip_process_pdu(slice_p encoded_pdu_data, app_connection_data_p app_connection_data, app_data_p app_data)
 {
     status_t rc = STATUS_OK;
     plc_connection_p connection = (plc_connection_p)app_connection_data;
     uint32_t pdu_start = 0;
-    eip_header_t header = {0};
+    eip_pdu_t decoded_pdu = {0};
 
     (void)app_data;
 
     detail("Starting.");
 
     info("got packet:");
-    debug_dump_ptr(DEBUG_INFO, slice_get_start_ptr(pdu), slice_get_end_ptr(pdu));
+    debug_dump_ptr(DEBUG_INFO, slice_get_start_ptr(encoded_pdu_data), slice_get_end_ptr(encoded_pdu_data));
 
     do {
         uint32_t session_handle = 0;
-        uint32_t request_len = slice_get_len(pdu);
+        uint32_t request_len = slice_get_len(encoded_pdu_data);
 
         if(request_len < EIP_HEADER_SIZE) {
             /* make sure that the size of the buffer is correct. */
 
             detail("PDU has %"PRIu32" bytes of data but needs %"PRIu32" bytes of data.", request_len, (uint32_t)(EIP_HEADER_SIZE));
 
-            if(slice_set_end_delta(pdu, (EIP_HEADER_SIZE - request_len))) {
-                /* success */
+            if(slice_set_end_delta(encoded_pdu_data, (EIP_HEADER_SIZE - request_len))) {
                 rc = STATUS_PARTIAL;
+                break;
+            } else {
+                rc = slice_get_status(encoded_pdu_data);
+                warn("Error setting end offset in encoded request data.");
                 break;
             }
         }
 
         /* parse the PDU EIP header and set the start of the request past that. */
-        rc = decode_eip_pdu(pdu, &header);
+        rc = decode_eip_header(encoded_pdu_data, &decoded_pdu, connection);
         if(rc != STATUS_OK) {
             warn("Got error %s attempting to decode the EIP PDU!", status_to_str(rc));
             break;
         }
 
-        /* If we have a session handle already, we must match it with the incoming pdu */
-        assert_warn(((!connection->session_handle) || (header.session_handle == connection->session_handle)),
+        /* If we have a session handle already, we must match it with the incoming encoded_pdu_data */
+        assert_warn(((!connection->session_handle) || (le2h32(decoded_pdu.eip_header.session_handle) == connection->session_handle)),
                      STATUS_BAD_INPUT,
                      "Request session handle %08"PRIx32" does not match the one for this connection, %08"PRIx32"!",
-                     header.session_handle,
+                     le2h32(decoded_pdu.eip_header.session_handle),
                      connection->session_handle
                     );
 
-        /* dispatch the pdu */
-        switch(header.command) {
+        /* dispatch the encoded_pdu_data */
+        switch(le2h16(decoded_pdu.eip_header.command)) {
             case EIP_REGISTER_SESSION:
-                rc = register_session(pdu, connection);
+                rc = process_register_session_request(encoded_pdu_data, &decoded_pdu, connection);
                 break;
 
             case EIP_UNREGISTER_SESSION:
-                rc = unregister_session(pdu, connection);
+                rc = process_unregister_session_request(encoded_pdu_data, &decoded_pdu, connection);
                 break;
 
             case EIP_CONNECTED_SEND:
-                rc = cpf_dispatch_connected_request(pdu, connection);
+                rc = cpf_dispatch_connected_request(encoded_pdu_data, &decoded_pdu, connection);
                 break;
 
             case EIP_UNCONNECTED_SEND:
-                rc = cpf_dispatch_unconnected_request(pdu, connection);
+                rc = cpf_dispatch_unconnected_request(encoded_pdu_data, &decoded_pdu, connection);
                 break;
 
             default:
@@ -172,15 +166,10 @@ status_t eip_process_pdu(slice_p pdu, app_connection_data_p app_connection_data,
 
         /* build up the response if everything was good. */
         if(rc == STATUS_OK) {
-            detail("EIP response has a payload of %"PRIu32" bytes.", slice_get_len(pdu));
-
-            /* set the session handle */
-            header.session_handle = connection->session_handle;
-
-            detail("Set session handle to %"PRIu32".", header.session_handle);
+            detail("EIP response has a payload of %"PRIu32" bytes.", slice_get_len(encoded_pdu_data));
 
             detail("Encoding EIP header.");
-            rc = encode_eip_header(pdu, &header);
+            rc = encode_eip_header(encoded_pdu_data, &decoded_pdu, connection);
             if(rc != STATUS_OK) {
                 warn("Error %s encoding response EIP header!", status_to_str(rc));
                 break;
@@ -212,83 +201,74 @@ status_t eip_process_pdu(slice_p pdu, app_connection_data_p app_connection_data,
 
 
 
-status_t register_session(slice_p pdu, plc_connection_p connection)
+status_t process_register_session_request(slice_p encoded_pdu_data, eip_pdu_p decoded_pdu, plc_connection_p connection)
 {
     status_t rc = STATUS_OK;
     uint32_t response_start = 0;
 
-    struct {
-        uint16_t eip_version;
-        uint16_t option_flags;
-    } register_request;
-
-    size_t request_payload_size = sizeof(register_request.eip_version) + sizeof(register_request.option_flags);
-    uint32_t pdu_length = 0;
 
     do {
-        uint32_t offset = 0;
+        uint32_t pdu_length = 0;
 
-        response_start = offset = slice_get_start(pdu);
-        rc = slice_get_status(pdu);
+        assert_warn((encoded_pdu_data), STATUS_NULL_PTR, "Encoded data pointer is null!");
+        assert_warn((decoded_pdu), STATUS_NULL_PTR, "Decoded PDU pointer is null!");
+
+        /* the start index is set by the previous stage. */
+
+        pdu_length = slice_get_len(encoded_pdu_data);
+        rc = slice_get_status(encoded_pdu_data);
         if(rc != STATUS_OK) {
-            rc = slice_get_status(pdu);
-            warn("Error %s trying to get the start offset!", status_to_str(rc));
+            warn("Error %s getting the encoded data length!", status_to_str(rc));
             break;
         }
 
-        /* make sure the payload is the right length. */
-        pdu_length = slice_get_len(pdu);
-        rc = slice_get_status(pdu);
-        if(rc != STATUS_OK) {
-            warn("Error %s getting the PDU length!", status_to_str(rc));
-            break;
-        }
-
-        if((size_t)pdu_length != request_payload_size) {
-            info("PDU length is not the right size!");
+        if(pdu_length < sizeof(decoded_pdu->eip_command_header.register_session_request)) {
+            info("PDU length is less than the size of the EIP header.");
             rc = STATUS_PARTIAL;
             break;
         }
 
-        GET_UINT_FIELD(pdu, register_request.eip_version);
-        GET_UINT_FIELD(pdu, register_request.option_flags);
+        /* overlay the EIP header on the data. */
+        decoded_pdu->eip_command_header.register_session_request = *(eip_register_session_p)slice_get_start_ptr(encoded_pdu_data);
 
         /* session_handle must be zero. */
         assert_warn((connection->session_handle == (uint32_t)0), STATUS_BAD_INPUT, "Request failed sanity check: pdu session handle is %04"PRIx32" but should be zero.", connection->session_handle);
 
         /* pdu EIP version must be 1 (one). */
-        assert_warn((register_request.eip_version == (uint32_t)1), STATUS_BAD_INPUT, "Request failed sanity check: pdu EIP version is %04"PRIx32" but should be one (1).", register_request.eip_version);
+        assert_warn((le2h16(decoded_pdu->eip_command_header.register_session_request.eip_version) == (uint16_t)1),
+                    STATUS_BAD_INPUT,
+                    "Request failed sanity check: pdu EIP version is %04"PRIx16" but should be one (1).",
+                    le2h16(decoded_pdu->eip_command_header.register_session_request.eip_version));
 
         /* pdu option flags must be zero. */
-        assert_warn((register_request.option_flags == (uint32_t)0), STATUS_BAD_INPUT, "Request failed sanity check: pdu option flags is %04"PRIx32" but should be zero.", register_request.option_flags);
+        assert_warn((le2h16(decoded_pdu->eip_command_header.register_session_request.option_flags) == (uint16_t)0),
+                    STATUS_BAD_INPUT,
+                    "Request failed sanity check: pdu option flags is %04"PRIx16" but should be zero.",
+                    le2h16(decoded_pdu->eip_command_header.register_session_request.option_flags));
 
         /* all good, generate a session handle. */
         connection->session_handle = (uint32_t)rand();
 
-        /* encode the response */
-        offset = response_start;
+        /* store it into the decoded PDU.  It will get put into the encoded data when the EIP header is encoded. */
+        decoded_pdu->eip_header.session_handle = h2le32(connection->session_handle);
 
-        SET_UINT_FIELD(pdu, register_request.eip_version);
-        SET_UINT_FIELD(pdu, register_request.option_flags);
-
-        /* set the PDU end point */
-        if(!slice_set_end(pdu, offset)) {
-            rc = slice_get_status(pdu);
-            warn("Error %s trying to set the PDU end!", status_to_str(rc));
+        /* set the end of the encoded data. */
+        if(!slice_set_end(encoded_pdu_data, slice_get_start(encoded_pdu_data) + (uint32_t)sizeof(eip_register_session_t))) {
+            rc = slice_get_status(encoded_pdu_data);
+            warn("Error %s trying tos et the end of the encoded data slice!", status_to_str(rc));
             break;
         }
     } while(0);
-
 
     return rc;
 }
 
 
 
-status_t unregister_session(slice_p pdu, slice_p response, plc_connection_p connection)
+status_t process_unregister_session_request(slice_p encoded_pdu_data, eip_pdu_p decoded_pdu, plc_connection_p connection)
 {
-    (void)pdu;
-    (void)response;
+    (void)encoded_pdu_data;
+    (void)decoded_pdu;
     (void)connection;
 
     /* shut down the connection */
@@ -297,27 +277,28 @@ status_t unregister_session(slice_p pdu, slice_p response, plc_connection_p conn
 
 
 
-status_t decode_eip_pdu(slice_p pdu, eip_header_p header)
+status_t decode_eip_header(slice_p encoded_pdu_data, eip_pdu_p decoded_pdu, plc_connection_p connection)
 {
     status_t rc = STATUS_OK;
 
     do {
-        uint32_t offset = 0;
         uint32_t pdu_length = 0;
+        uint32_t eip_payload_length = 0;
 
-        assert_warn((header), STATUS_NULL_PTR, "Header pointer is null!");
+        assert_warn((encoded_pdu_data), STATUS_NULL_PTR, "Encoded data pointer is null!");
+        assert_warn((decoded_pdu), STATUS_NULL_PTR, "Decoded PDU pointer is null!");
 
         /* make sure we are starting at the beginning of the PDU. */
-        if(!slice_set_start(pdu, 0)) {
-            rc = slice_get_status(pdu);
-            warn("Error %s trying to set start to zero on the PDU!", status_to_str(rc));
+        if(!slice_set_start(encoded_pdu_data, 0)) {
+            rc = slice_get_status(encoded_pdu_data);
+            warn("Error %s trying to set start to zero on the encoded data!", status_to_str(rc));
             break;
         }
 
-        pdu_length = slice_get_len(pdu);
-        rc = slice_get_status(pdu);
+        pdu_length = slice_get_len(encoded_pdu_data);
+        rc = slice_get_status(encoded_pdu_data);
         if(rc != STATUS_OK) {
-            warn("Error %s getting the PDU length!", status_to_str(rc));
+            warn("Error %s getting the encoded data length!", status_to_str(rc));
             break;
         }
 
@@ -327,22 +308,27 @@ status_t decode_eip_pdu(slice_p pdu, eip_header_p header)
             break;
         }
 
-        /* set the header payload size */
-        header->length = pdu_length - EIP_HEADER_SIZE;
+        /* overlay the EIP header on the data. */
+        decoded_pdu->eip_header = *(eip_header_p)slice_get_start_ptr(encoded_pdu_data);
 
-        /* clear out the header. */
-        memset(header, 0, sizeof(*header));
+        /* get the length and check against the encoded PDU size. */
+        eip_payload_length = le2h16(decoded_pdu->eip_header.length);
 
-        GET_UINT_FIELD(pdu, header->command);
-        GET_UINT_FIELD(pdu, header->length);
-        GET_UINT_FIELD(pdu, header->session_handle);
-        GET_UINT_FIELD(pdu, header->status);
-        GET_UINT_FIELD(pdu, header->sender_context);
-        GET_UINT_FIELD(pdu, header->options);
+        if(pdu_length < sizeof(decoded_pdu->eip_header) + eip_payload_length) {
+            info("Not enough data, read more from the socket.");
+            rc = STATUS_PARTIAL;
+            break;
+        }
+
+        if(pdu_length > sizeof(decoded_pdu->eip_header) + eip_payload_length) {
+            warn("Too much data! Expected %"PRIu32" bytes in the encoded request. Got %"PRIu32" bytes.", (uint32_t)(sizeof(decoded_pdu->eip_header) + eip_payload_length), pdu_length);
+            rc = STATUS_BAD_INPUT;
+            break;
+        }
 
         /* set up for the rest of the processing */
-        if(!slice_set_start(pdu, offset)) {
-            rc = slice_get_status(pdu);
+        if(!slice_set_start(encoded_pdu_data, (uint32_t)sizeof(decoded_pdu->eip_header))) {
+            rc = slice_get_status(encoded_pdu_data);
             warn("Error %s trying to set start after the header in the PDU!", status_to_str(rc));
             break;
         }
@@ -354,43 +340,40 @@ status_t decode_eip_pdu(slice_p pdu, eip_header_p header)
 
 
 
-status_t encode_eip_header(slice_p pdu, eip_header_p header)
+status_t encode_eip_header(slice_p encoded_pdu_data, eip_pdu_p decoded_pdu, plc_connection_p connection)
 {
     status_t rc = STATUS_OK;
 
     do {
-        uint32_t offset = 0;
-        uint32_t pdu_len = 0;
+        uint32_t pdu_length;
+        eip_header_p eip_header = NULL;
 
-        /* override the boundaries on the PDU. */
-        if(!slice_set_start(pdu, 0)) {
-            rc = slice_get_status(pdu);
-            warn("Error %s trying to set start to zero on the error PDU!", status_to_str(rc));
+        assert_warn((encoded_pdu_data), STATUS_NULL_PTR, "Encoded data pointer is null!");
+        assert_warn((decoded_pdu), STATUS_NULL_PTR, "Decoded PDU pointer is null!");
+
+        /* make sure we are starting at the beginning of the PDU. */
+        if(!slice_set_start(encoded_pdu_data, 0)) {
+            rc = slice_get_status(encoded_pdu_data);
+            warn("Error %s trying to set start to zero on the encoded data!", status_to_str(rc));
             break;
         }
 
-        pdu_len = slice_get_len(pdu);
-        rc = slice_get_status(pdu);
+        pdu_length = slice_get_len(encoded_pdu_data);
+        rc = slice_get_status(encoded_pdu_data);
         if(rc != STATUS_OK) {
-            warn("Error %s getting the PDU length!", status_to_str(rc));
+            warn("Error %s getting the encoded data length!", status_to_str(rc));
             break;
         }
 
-        if(pdu_len < EIP_HEADER_SIZE) {
-            warn("The whole EIP PDU is smaller than the EIP header!");
-            rc = STATUS_INTERNAL_FAILURE;
-            break;
-        }
+        /* overlay the EIP header on the data. */
+        eip_header = (eip_header_p)slice_get_start_ptr(encoded_pdu_data);
 
-        /* set the size to the payload size */
-        header->length = pdu_len - EIP_HEADER_SIZE;
+        /* update the length */
+        eip_header->length = h2le16((uint16_t)pdu_length - (uint16_t)sizeof(*eip_header));
 
-        SET_UINT_FIELD(pdu, header->command);
-        SET_UINT_FIELD(pdu, header->length);
-        SET_UINT_FIELD(pdu, header->session_handle);
-        SET_UINT_FIELD(pdu, header->status);
-        SET_UINT_FIELD(pdu, header->sender_context);
-        SET_UINT_FIELD(pdu, header->options);
+        /* update the session handle and the session context */
+        eip_header->session_handle = h2le32(connection->session_handle);
+        eip_header->sender_context = h2le64(connection->sender_context);
     } while(0);
 
     return rc;
@@ -489,34 +472,34 @@ eip_status_t translate_to_eip_status(status_t status)
 }
 
 
-status_t encode_eip_error_pdu(slice_p pdu, eip_header_p header, status_t status)
-{
-    status_t rc = STATUS_OK;
+// status_t encode_eip_error_pdu(slice_p pdu, eip_header_p header, status_t status)
+// {
+//     status_t rc = STATUS_OK;
 
-    info("Starting with input status %s.", status_to_str(status));
+//     info("Starting with input status %s.", status_to_str(status));
 
-    do {
-        /* override the start offset. */
-        if(!slice_set_start(pdu, 0)) {
-            rc = slice_get_status(pdu);
-            warn("Error %s trying to set start to zero on the error PDU!", status_to_str(rc));
-            break;
-        }
+//     do {
+//         /* override the start offset. */
+//         if(!slice_set_start(pdu, 0)) {
+//             rc = slice_get_status(pdu);
+//             warn("Error %s trying to set start to zero on the error PDU!", status_to_str(rc));
+//             break;
+//         }
 
-        /* override the PDU length */
-        if(!slice_set_len(pdu, EIP_HEADER_SIZE)) {
-            rc = slice_get_status(pdu);
-            warn("Error %s trying to set the error PDU size!", status_to_str(rc));
-            break;
-        }
+//         /* override the PDU length */
+//         if(!slice_set_len(pdu, EIP_HEADER_SIZE)) {
+//             rc = slice_get_status(pdu);
+//             warn("Error %s trying to set the error PDU size!", status_to_str(rc));
+//             break;
+//         }
 
-        /* set the status PDU field */
-        header->status = translate_to_eip_status(status);
+//         /* set the status PDU field */
+//         header->status = h2le32(translate_to_eip_status(status));
 
-        rc = encode_eip_header(pdu, header);
-    } while(0);
+//         rc = encode_eip_header(pdu, header, connection);
+//     } while(0);
 
-    info("Done with status %s.", status_to_str(rc));
+//     info("Done with status %s.", status_to_str(rc));
 
-    return rc;
-}
+//     return rc;
+// }

@@ -91,6 +91,22 @@ static inline uint8_t *slice_get_end_ptr(slice_p slice)
 extern bool slice_set_end(slice_p slice, uint32_t end_abs);
 extern bool slice_set_end_delta(slice_p slice, int32_t end_delta);
 
+
+static inline uint8_t *slice_get_offset_ptr(slice_p slice, uint32_t offset)
+{
+    uint8_t *result = NULL;
+
+    if(slice) {
+        if(slice_contains_offset(slice, offset)) {
+            result = slice->data + offset;
+            slice->status = STATUS_OK;
+        } else {
+            slice->status = STATUS_OUT_OF_BOUNDS;
+        }
+    }
+    return result;
+}
+
 static inline status_t slice_get_status(slice_p slice)
 {
     if(!slice) {
