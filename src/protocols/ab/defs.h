@@ -458,7 +458,7 @@ START_PACK typedef struct {
     uint8_t cm_req_path_size;       /* ALWAYS 2, size in words of path, next field */
     uint8_t cm_req_path[4];         /* ALWAYS 0x20,0x06,0x24,0x01 for CM, instance 1*/
 
-    /* Forward Open Params */
+    /* Forward Close Params */
     uint8_t secs_per_tick;       /* seconds per tick */
     uint8_t timeout_ticks;       /* timeout = srd_secs_per_tick * src_timeout_ticks */
     uint16_le conn_serial_number;    /* our connection ID/serial number */
