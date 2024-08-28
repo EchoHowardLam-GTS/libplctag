@@ -66,181 +66,122 @@ typedef eip_header_t *eip_header_p;
 
 
 typedef START_PACK struct {
-    uint16_le eip_version;
-    uint16_le option_flags;
-} END_PACK eip_register_session_t;
+    struct {
+        uint16_le command; /* = EIP_UNCONNECTED_SEND */
+        uint16_le length;
+        uint32_le session_handle;
+        uint32_le status;
+        uint64_le sender_context;
+        uint32_le options;
+    } eip_header;
 
-typedef eip_register_session_t *eip_register_session_p;
+    struct {
+        uint16_le eip_version;
+        uint16_le option_flags;
+    } register_session_args;
 
+} END_PACK eip_register_session_request_pdu_t;
 
-typedef START_PACK struct {
-    uint32_le interface_handle;
-    uint16_le router_timeout;
-    uint16_le item_count;
-    uint16_le item_addr_type;
-    uint16_le item_addr_length;
-    uint32_le conn_id;
-    uint16_le item_data_type;
-    uint16_le item_data_length;
-    uint16_le conn_seq;
-} END_PACK cpf_connected_header_t;
-
-typedef cpf_connected_header_t *cpf_connected_header_p;
+/* request and response have the same fields and layout */
+typedef eip_register_session_request_pdu_t eip_register_session_response_pdu_t;
 
 
 typedef START_PACK struct {
-    uint32_le interface_handle;
-    uint16_le router_timeout;
-    uint16_le item_count;
-    uint16_le item_addr_type;
-    uint16_le item_addr_length;
-    uint16_le item_data_type;
-    uint16_le item_data_length;
-} END_PACK cpf_unconnected_header_t;
+    struct {
+        uint16_le command; /* EIP_CONNECTED_SEND */
+        uint16_le length;
+        uint32_le session_handle;
+        uint32_le status;
+        uint64_le sender_context;
+        uint32_le options;
+    } eip_header;
 
-typedef cpf_unconnected_header_t *cpf_unconnected_header_p;
+    struct {
+        uint32_le interface_handle;
+        uint16_le router_timeout;
+        uint16_le item_count;
+        uint16_le item_addr_type;
+        uint16_le item_addr_length;
+        uint32_le conn_id;
+        uint16_le item_data_type;
+        uint16_le item_data_length;
+        uint16_le conn_seq;
+    } cpf_conn_header;
 
-
-
-
-typedef START_PACK struct {
-    uint8_t secs_per_tick;
-    uint8_t timeout_ticks;
-    uint32_le orig_to_targ_conn_id;
-    uint32_le targ_to_orig_conn_id;
-    uint16_le conn_serial_number;
-    uint16_le orig_vendor_id;
-    uint32_le orig_serial_number;
-    uint8_t conn_timeout_multiplier;
-    uint8_t reserved[3];
-    uint32_le orig_to_targ_rpi;
-    uint16_le orig_to_targ_conn_params;
-    uint32_le targ_to_orig_rpi;
-    uint16_le targ_to_orig_conn_params;
-    uint8_t transport_class;
-} END_PACK cip_forward_open_request_args_t;
-
-typedef cip_forward_open_request_args_t *forward_open_request_args_p;
-
-
-typedef START_PACK struct {
-    uint8_t secs_per_tick;
-    uint8_t timeout_ticks;
-    uint32_le orig_to_targ_conn_id;
-    uint32_le targ_to_orig_conn_id;
-    uint16_le conn_serial_number;
-    uint16_le orig_vendor_id;
-    uint32_le orig_serial_number;
-    uint8_t conn_timeout_multiplier;
-    uint8_t reserved[3];
-    uint32_le orig_to_targ_rpi;
-    uint32_le orig_to_targ_conn_params;
-    uint32_le targ_to_orig_rpi;
-    uint32_le targ_to_orig_conn_params;
-    uint8_t transport_class;
-} END_PACK cip_forward_open_ex_request_args_t;
-
-typedef cip_forward_open_ex_request_args_t *cip_forward_open_ex_request_args_p;
+} END_PACK eip_cpf_conn_header_t;
 
 
 
 typedef START_PACK struct {
-    uint8_t secs_per_tick;       /* seconds per tick */
-    uint8_t timeout_ticks;       /* timeout = srd_secs_per_tick * src_timeout_ticks */
-    uint16_le conn_serial_number;    /* our connection ID/serial number */
-    uint16_le orig_vendor_id;        /* our unique vendor ID */
-    uint32_le orig_serial_number;    /* our unique serial number */
-} END_PACK cip_forward_close_request_args_t;
+    struct {
+        uint16_le command; /* = EIP_UNCONNECTED_SEND */
+        uint16_le length;
+        uint32_le session_handle;
+        uint32_le status;
+        uint64_le sender_context;
+        uint32_le options;
+    } eip_header;
 
-typedef cip_forward_close_request_args_t *cip_forward_close_request_args_p;
-
-
-
-
-typedef START_PACK struct {
-    uint8_t service;
-    uint8_t reserved;
-    uint8_t status;
-    uint8_t num_extended_status_words;
-} END_PACK cip_response_header_t;
-
-typedef cip_response_header_t *cip_response_header_p;
-
+    struct {
+        uint32_le interface_handle;
+        uint16_le router_timeout;
+        uint16_le item_count;
+        uint16_le item_addr_type;
+        uint16_le item_addr_length;
+        uint16_le item_data_type;
+        uint16_le item_data_length;
+    } cpf_unconn_header;
+} END_PACK eip_cpf_unconn_header_t;
 
 
 
-typedef START_PACK struct {
-    uint32_le orig_to_targ_conn_id;
-    uint32_le targ_to_orig_conn_id;
-    uint16_le conn_serial_number;
-    uint16_le orig_vendor_id;
-    uint32_le orig_serial_number;
-    uint32_le orig_to_targ_api;
-    uint32_le targ_to_orig_api;
-    uint8_t app_data_size;
-    uint8_t reserved2;
-} END_PACK cip_forward_open_response_t;
-
-typedef cip_forward_open_response_t *cip_forward_open_response_p;
 
 
+// typedef struct {
+//     eip_header_t eip_header;
 
-typedef START_PACK struct {
-    uint16_le conn_serial_number;
-    uint16_le orig_vendor_id;
-    uint32_le orig_serial_number;
-    uint8_t path_size;
-    uint8_t reserved;
+//     union {
+//         eip_register_session_t register_session_request;
 
-} END_PACK cip_forward_close_response_t;
+//         cpf_connected_header_t cpf_connected_header;
 
-typedef cip_forward_close_response_t *cip_forward_close_response_p;
+//         cpf_unconnected_header_t cpf_unconnected_header;
+//     } eip_command_header;
 
+//     uint32_t cip_payload_offset;
 
+//     union {
+//         struct {
+//             uint8_t service;
+//             slice_t service_epath;
 
-typedef struct {
-    eip_header_t eip_header;
+//             union {
+//                 cip_forward_open_request_args_t forward_open_request_args;
 
-    union {
-        eip_register_session_t register_session_request;
+//                 cip_forward_open_ex_request_args_t forward_open_ex_request_args;
 
-        cpf_connected_header_t cpf_connected_header;
+//                 cip_forward_close_request_args_t forward_close_request_args;
+//             } request_args;
 
-        cpf_unconnected_header_t cpf_unconnected_header;
-    } eip_command_header;
+//             slice_t routing_epath;
 
-    union {
-        struct {
-            uint8_t service;
-            slice_t service_epath;
+//         } cip_request;
 
-            union {
-                cip_forward_open_request_args_t forward_open_request_args;
+//         struct {
+//             cip_response_header_t cip_response_header;
 
-                cip_forward_open_ex_request_args_t forward_open_ex_request_args;
+//             union {
+//                 cip_forward_open_response_t forward_open_response;
 
-                cip_forward_close_request_args_t forward_close_request_args;
-            } request_args;
+//                 cip_forward_close_response_t forward_close_response;
+//             } response_args;
 
-            slice_t routing_epath;
+//             slice_t routing_path;
+//         } cip_response;
+//     } cip_pdu;
+// } eip_pdu_t;
 
-        } cip_request;
-
-        struct {
-            cip_response_header_t cip_response_header;
-
-            union {
-                cip_forward_open_response_t forward_open_response;
-
-                cip_forward_close_response_t forward_close_response;
-            } response_args;
-
-            slice_t routing_path;
-        } cip_response;
-    } cip_pdu;
-} eip_pdu_t;
-
-typedef eip_pdu_t *eip_pdu_p;
+// typedef eip_pdu_t *eip_pdu_p;
 
 
 

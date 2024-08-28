@@ -44,19 +44,6 @@
 #include "utils/time_utils.h"
 
 
-typedef enum {
-    CIP_SERVICE_MULTI_REQUEST = 0x0A,
-    CIP_SERVICE_PCCC_EXECUTE = 0x4B,
-    CIP_SERVICE_READ_TAG = 0x4C,
-    CIP_SERVICE_WRITE_TAG = 0x4D,
-    CIP_SERVICE_FORWARD_CLOSE = 0x4E, /* DUPE !*/
-    CIP_SERVICE_RMW_TAG = 0x4E,  /* DUPE ! */
-    CIP_SERVICE_READ_TAG_FRAG = 0x52,
-    CIP_SERVICE_WRITE_TAG_FRAG = 0x53,
-    CIP_SERVICE_FORWARD_OPEN = 0x54,
-    CIP_SERVICE_FORWARD_OPEN_EX = 0x5B,
-    CIP_SERVICE_LIST_TAG_ATTRIBS = 0x55,
-} cip_service_type_t;
 
 /* path to match. */
 // uint8_t LOGIX_CONN_PATH[] = { 0x03, 0x00, 0x00, 0x20, 0x02, 0x24, 0x01 };
@@ -65,6 +52,9 @@ typedef enum {
 #define CIP_DONE               ((uint8_t)0x80)
 
 #define CIP_SYMBOLIC_SEGMENT_MARKER ((uint8_t)0x91)
+
+
+#define CIP_MIN_REQUEST_SIZE (1 + 1 + 4) /* 1 (CIP service), 1 (EPATH length), 4 (class/instance)*/
 
 // typedef struct {
 //     uint8_t service_code;   /* why is the operation code _before_ the path? */
@@ -85,10 +75,7 @@ typedef cip_req_t *cip_req_p;
 
 
 
-static status_t decode_pdu(slice_p pdu, cip_req_p cip_req);
-
-
-static status_t process_forward_open(cip_req_p cip_req, uint32_t pdu_start, plc_connection_p connection);
+static status_t cip_process_forward_open(slice_p encoded_pdu_data, uint32_t header_len, plc_connection_p connection);
 // static status_t process_forward_close(slice_p pdu, plc_connection_p connection);
 // static status_t process_tag_read_request(slice_p pdu, plc_connection_p connection);
 // static status_t process_tag_write_request(slice_p pdu, plc_connection_p connection);
@@ -96,65 +83,54 @@ static status_t process_forward_open(cip_req_p cip_req, uint32_t pdu_start, plc_
 
 // static status_t process_tag_segment(tcp_connection_p connection, tag_def_t **tag);
 // static status_t process_tag_dim_segment(slice_p tag_path, tag_def_t *tag);
-static bool make_cip_error(slice_p response, uint8_t cip_cmd, uint8_t cip_err, bool extend, uint16_t extended_error);
+
+static status_t make_cip_error(slice_p encoded_pdu_data, uint8_t cip_cmd, uint8_t cip_err, int8_t num_extended_err_words, uint16_t *extended_error_words);
 static int match_path(slice_p pdu, bool need_pad, uint8_t *path, uint8_t path_len);
 
 
 
-status_t cip_process_pdu(slice_p pdu, plc_connection_p connection)
+status_t cip_process_request(slice_p encoded_pdu_data, plc_connection_p connection)
 {
     status_t rc = STATUS_OK;
     cip_req_t cip_req;
     uint32_t pdu_start = 0;
+    cip_request_header_t *header = NULL;
 
     info("Got CIP request:");
-    debug_dump_ptr(DEBUG_INFO, slice_get_start_ptr(pdu), slice_get_end_ptr(pdu));
+    debug_dump_ptr(DEBUG_INFO, slice_get_start_ptr(encoded_pdu_data), slice_get_end_ptr(encoded_pdu_data));
 
     do {
-        pdu_start = slice_get_start(pdu);
-        if((rc = slice_get_status(pdu)) != STATUS_OK) {
-            warn("Error %s trying to get PDU start index!");
-            break;
+        uint32_t header_len = 0;
+
+        /* check lengths, this is the minimum */
+        assert_warn((slice_get_len(encoded_pdu_data) >= sizeof(cip_request_header_t)), STATUS_NO_RESOURCE, "Insufficient data for a CIP request!");
+
+        /* overlay the header */
+        header = (cip_request_header_t *)slice_get_start_ptr(encoded_pdu_data);
+
+        /* calculate the length of the service command plus EPATH. */
+        header_len = slice_get_start(encoded_pdu_data) + sizeof(*header) +  (header->epath_word_count * 2);
+
+        /* check that we have room for the epath */
+        assert_warn((slice_get_len(encoded_pdu_data) >= header_len), STATUS_NO_RESOURCE, "Insufficient data for the CIP service and EPATH!");
+
+        /* dispatch the request */
+        switch(header->service) {
+            case CIP_SERVICE_FORWARD_OPEN:
+                rc = cip_process_forward_open(encoded_pdu_data, header_len, connection);
+                break;
+
+            default:
+                warn("Unrecognized CIP service %x!", header->service);
+                rc = STATUS_NOT_RECOGNIZED;
+                break;
         }
 
-        /* decode the PUD into service, epath, and payload chunks */
-        rc = decode_pdu(pdu, &cip_req);
-        if(rc != STATUS_OK) {
-            warn("Got error %s splitting the CIP PDU into chunks!", status_to_str(rc));
-            break;
-        }
-
-        switch(cip_req.service) {
-            case CIP_SERVICE_MULTI_REQUEST: rc = STATUS_NOT_SUPPORTED; break;
-
-            case CIP_SERVICE_PCCC_EXECUTE: rc = STATUS_NOT_SUPPORTED; break;
-
-            case CIP_SERVICE_READ_TAG: rc = STATUS_NOT_SUPPORTED; break;
-
-            case CIP_SERVICE_WRITE_TAG: rc = STATUS_NOT_SUPPORTED; break;
-
-            case CIP_SERVICE_FORWARD_CLOSE:  rc = STATUS_NOT_SUPPORTED; break;   /* DUPE !*/
-
-
-            // case CIP_SERVICE_RMW_TAG:        /* DUPE ! */
-
-            case CIP_SERVICE_READ_TAG_FRAG: rc = STATUS_NOT_SUPPORTED; break;
-
-            case CIP_SERVICE_WRITE_TAG_FRAG: rc = STATUS_NOT_SUPPORTED; break;
-
-            case CIP_SERVICE_FORWARD_OPEN: rc = process_forward_open(&pdu, pdu_start, connection); break;
-
-            case CIP_SERVICE_FORWARD_OPEN_EX:
-
-            case CIP_SERVICE_LIST_TAG_ATTRIBS: rc = STATUS_NOT_SUPPORTED; break;
-
-            default: rc = STATUS_NOT_RECOGNIZED; break;
-        }
     } while(0);
 
     /* handle case where we have unimplemented services */
     if(rc != STATUS_OK) {
-        rc = make_cip_error(pdu, cip_req.service, CIP_ERR_UNSUPPORTED, false, 0);
+        rc = make_cip_error(encoded_pdu_data, CIP_ERR_UNSUPPORTED, false, 0, NULL);
     }
 
     return rc;
@@ -162,192 +138,150 @@ status_t cip_process_pdu(slice_p pdu, plc_connection_p connection)
 
 
 
-status_t decode_pdu(slice_p pdu, cip_req_p cip_req)
-{
-    status_t rc = STATUS_OK;
+// status_t decode_cip_request_header(slice_p encoded_pdu_data, eip_pdu_p decoded_pdu, plc_connection_p connection)
+// {
+//     status_t rc = STATUS_OK;
 
-    do {
-        uint32_t pdu_start = 0;
-        uint32_t offset = 0;
-        uint8_t epath_word_length = 0;
-        uint16_t epath_byte_length = 0;
-        uint32_t epath_start = 0;
-        uint32_t epath_end = 0;
-        slice_t service_header = {0};
+//     do {
+//         uint32_t pdu_start = 0;
+//         uint32_t offset = 0;
+//         uint32_t request_length = 0;
+//         uint8_t epath_word_length = 0;
 
-        pdu_start = slice_get_start(pdu);
-        if((rc = slice_get_status(pdu)) != STATUS_OK) {
-            warn("Error %s getting PDU start index!");
-            break;
-        }
+//         pdu_start = slice_get_start(encoded_pdu_data);
+//         if((rc = slice_get_status(encoded_pdu_data)) != STATUS_OK) {
+//             warn("Error %s getting PDU start index!");
+//             break;
+//         }
 
-        /* get the service byte */
-        GET_UINT_FIELD(pdu, cip_req->service);
+//         /* save the start */
+//         decoded_pdu->cip_payload_offset = pdu_start;
 
-        /* get the EPATH length in words */
-        GET_UINT_FIELD(pdu, epath_word_length);
+//         /* check the PDU length. */
+//         request_length = slice_get_len(encoded_pdu_data);
 
-        cip_req->epath_start = offset;
+//         if(request_length < CIP_MIN_REQUEST_SIZE) {
+//             warn("Too little data for a valid CIP service request!");
+//             rc = STATUS_NO_RESOURCE;
+//             break;
+//         }
 
-        /* calculate the actual length of the epath in bytes. */
-        epath_byte_length = 2 * epath_word_length;
+//         offset = pdu_start;
 
-        cip_req->epath_end = cip_req->epath_start + epath_byte_length;
+//         /* get the CIP service and set the slice pointing to the EPATH. */
+//         decoded_pdu->cip_pdu.cip_request.service = slice_get_uint(encoded_pdu_data, offset, SLICE_BYTE_ORDER_LE, 8);
 
-        info("CIP request service %x.", cip_req->service);
-        info("CIP EPATH:")
-        debug_dump_ptr(DEBUG_INFO, slice_get_start_ptr(cip_req->pdu)+(cip->req->epath_end - cip_req->epath_start))
+//         offset++;
+//         epath_word_length = slice_get_uint(encoded_pdu_data, offset, SLICE_BYTE_ORDER_LE, 8);
+//         offset++;
 
-        info("Processing CIP PDU with EPATH:");
-        debug_dump_ptr(DEBUG_INFO, slice_get_start_ptr(&pdu->epath), slice_get_end_ptr(&pdu->epath));
+//         /* check the size again now that we know how long the EPATH is supposed to be. */
+//         if(request_length < (uint32_t)(epath_word_length * 2) + (uint32_t)2) {
+//             warn("Too little data to contain the CIP service EPATH!");
+//             rc = STATUS_NO_RESOURCE;
+//             break;
+//         }
 
-        info("Processing CIP PDU with payload:");
-        debug_dump_ptr(DEBUG_INFO, pdu->payload.start, pdu->payload.end);
-    } while(0);
+//         /* set up the epath slice */
+//         /* FIXME - check result codes! */
+//         slice_init_child(&(decoded_pdu->cip_pdu.cip_request.service_epath), encoded_pdu_data);
+//         slice_set_end(&(decoded_pdu->cip_pdu.cip_request.service_epath), offset + (epath_word_length * 2));
+//         slice_set_start(&(decoded_pdu->cip_pdu.cip_request.service_epath), offset);
 
-    return rc;
-}
+//         /* set the start of the encoded data to show we've consumed the service and path */
+//         slice_set_start(encoded_pdu_data, offset);
+
+//         info("CIP request service %x.", decoded_pdu->cip_pdu.cip_request.service);
+
+//         info("Processing CIP PDU with EPATH:");
+//         debug_dump_ptr(DEBUG_INFO, slice_get_start_ptr(&(decoded_pdu->cip_pdu.cip_request.service_epath)), slice_get_end_ptr(&(decoded_pdu->cip_pdu.cip_request.service_epath)));
+
+//         info("Processing CIP PDU with payload:");
+//         debug_dump_ptr(DEBUG_INFO, slice_get_start_ptr(encoded_pdu_data), slice_get_end_ptr(encoded_pdu_data));
+//     } while(0);
+
+//     return rc;
+// }
 
 
-/* a handy structure to hold all the parameters we need to receive in a Forward Open request. */
-typedef struct {
-    uint8_t forward_open_service;
-    uint8_t secs_per_tick;                  /* seconds per tick */
-    uint8_t timeout_ticks;                  /* timeout = srd_secs_per_tick * src_timeout_ticks */
-    uint32_t server_conn_id;                /* 0, returned by server in reply. */
-    uint32_t client_conn_id;                /* sent by client. */
-    uint16_t conn_serial_number;            /* client connection ID/serial number */
-    uint16_t orig_vendor_id;                /* client unique vendor ID */
-    uint32_t orig_serial_number;            /* client unique serial number */
-    uint8_t conn_timeout_multiplier;        /* timeout = mult * RPI */
-    uint8_t reserved[3];                    /* reserved, set to 0 */
-    uint32_t client_to_server_rpi;          /* us to target RPI - Request Packet Interval in microseconds */
-    uint32_t client_to_server_conn_params;  /* PDU size from client to us, plus other flags */
-    uint32_t server_to_client_rpi;          /* target to us RPI, in microseconds */
-    uint32_t server_to_client_conn_params;  /* PDU size from us to client, plus other flags */
-    uint8_t transport_class;                /* ALWAYS 0xA3, server transport, class 3, application trigger */
-    slice_t connection_path;                /* connection path. */
-} forward_open_t;
+// /* a handy structure to hold all the parameters we need to receive in a Forward Open request. */
+// typedef struct {
+//     uint8_t forward_open_service;
+//     uint8_t secs_per_tick;                  /* seconds per tick */
+//     uint8_t timeout_ticks;                  /* timeout = srd_secs_per_tick * src_timeout_ticks */
+//     uint32_t server_conn_id;                /* 0, returned by server in reply. */
+//     uint32_t client_conn_id;                /* sent by client. */
+//     uint16_t conn_serial_number;            /* client connection ID/serial number */
+//     uint16_t orig_vendor_id;                /* client unique vendor ID */
+//     uint32_t orig_serial_number;            /* client unique serial number */
+//     uint8_t conn_timeout_multiplier;        /* timeout = mult * RPI */
+//     uint8_t reserved[3];                    /* reserved, set to 0 */
+//     uint32_t client_to_server_rpi;          /* us to target RPI - Request Packet Interval in microseconds */
+//     uint32_t client_to_server_conn_params;  /* PDU size from client to us, plus other flags */
+//     uint32_t server_to_client_rpi;          /* target to us RPI, in microseconds */
+//     uint32_t server_to_client_conn_params;  /* PDU size from us to client, plus other flags */
+//     uint8_t transport_class;                /* ALWAYS 0xA3, server transport, class 3, application trigger */
+//     slice_t connection_path;                /* connection path. */
+// } forward_open_t;
 
 /* the minimal Forward Open with no path */
 #define CIP_FORWARD_OPEN_MIN_SIZE   (42)
 #define CIP_FORWARD_OPEN_EX_MIN_SIZE   (46)
 
 
-status_t process_forward_open(cip_req_p cip_req, uint32_t pdu_start, plc_connection_p connection)
+status_t cip_process_forward_open(slice_p encoded_pdu_data, uint32_t header_len, plc_connection_p connection)
 {
     status_t rc = STATUS_OK;
-    status_t slice_rc = STATUS_OK;
-    uint8_t cip_service = 0;
-    uint8_t *saved_request_start = NULL;
-    uint8_t *saved_response_start = NULL;
-    slice_t conn_path = {0};
-    forward_open_t forward_open = {0};
+    cip_forward_open_request_args_t *fo_args = NULL;
+    uint8_t cip_status = CIP_OK;
+    uint8_t ext_status_word_count = 0;
+    uint16_t ext_status_words[3];
 
-
-    info("Checking Forward Open request:");
-    debug_dump_ptr(DEBUG_INFO, slice_get_start_ptr(cip_req->payload), slice_get_end_ptr(cip_req->payload));
+    info("Processing Forward Open request:");
+    debug_dump_ptr(DEBUG_INFO, slice_get_start_ptr(encoded_pdu_data), slice_get_end_ptr(encoded_pdu_data));
 
     do {
+        uint32_t required_request_size = 0;
 
-        /* decode the PDU */
-        forward_open.service = cip_req->service;
+        /* do we have the minimum size? */
+        required_request_size = sizeof(*fo_args) + header_len;
 
-        GET_UINT_FIELD(cip_req->payload, forward_open.)
+        assert_warn((slice_get_len(encoded_pdu_data) >= required_request_size), STATUS_NO_RESOURCE, "Insufficient data for Forward Open request!");
 
-        slice_rc = slice_unpack(request, "&u1", &forward_open.forward_open_service);
-
-        assert_error((slice_rc == STATUS_OK), STATUS_BAD_INPUT, "Unable to unpack request slice!");
-
-        /* some of the services need the service */
-        request->start = saved_request_start;
-
-        /* store the response start for later. */
-        saved_response_start = response->start;
-
-        /* unpack the first common part. */
-        slice_rc = slice_unpack(request, "u1,u1,u4,u4,u2,u2,u4,u1,00,00,00,u4",
-                                          &forward_open.secs_per_tick,
-                                          &forward_open.timeout_ticks,
-                                          &forward_open.server_conn_id, /* must be zero */
-                                          &forward_open.client_conn_id,
-                                          &forward_open.conn_serial_number,
-                                          &forward_open.orig_vendor_id,
-                                          &forward_open.orig_serial_number,
-                                          &forward_open.conn_timeout_multiplier,
-                                          &forward_open.client_to_server_rpi
-                                );
-
-        assert_error((slice_rc == STATUS_OK), STATUS_BAD_INPUT, "Unable to unpack request slice!");
-
-        if(forward_open.forward_open_service == CIP_SERVICE_FORWARD_OPEN) {
-            uint16_t c2s_params = 0;
-            uint16_t s2c_params = 0;
-
-            /* now unpack the client params which are service-specific */
-            slice_rc = slice_unpack(request, "u2", &c2s_params);
-
-            forward_open.client_to_server_conn_params = (uint32_t)c2s_params;
-        } else {
-            slice_rc = slice_unpack(request, "u4", &forward_open.client_to_server_conn_params);
-        }
-
-        assert_error((slice_rc == STATUS_OK), STATUS_BAD_INPUT, "Unable to unpack request slice!");
-
-        slice_rc = slice_unpack(request, "u4", &forward_open.server_to_client_rpi);
-
-        assert_error((slice_rc == STATUS_OK), STATUS_BAD_INPUT, "Unable to unpack request slice!");
-
-        if(forward_open.forward_open_service == CIP_SERVICE_FORWARD_OPEN) {
-            uint16_t s2c_params = 0;
-
-            /* now unpack the client params which are service-specific */
-            slice_rc = slice_unpack(request, "u2", &s2c_params);
-
-            forward_open.server_to_client_conn_params = (uint32_t)s2c_params;
-        } else {
-            slice_rc = slice_unpack(request, "u4", &forward_open.server_to_client_conn_params);
-        }
-
-        assert_error((slice_rc == STATUS_OK), STATUS_BAD_INPUT, "Unable to unpack request slice!");
-
-        /* now get the rest */
-        slice_rc = slice_unpack(request, "u8,e",
-                                          &forward_open.transport_class,
-                                          &forward_open.connection_path
-                               );
-        assert_error((slice_rc == STATUS_OK), STATUS_BAD_INPUT, "Unable to unpack request slice!");
+        /* overlay to get the data */
+        fo_args = (cip_forward_open_request_args_t *)(slice_get_start_ptr(encoded_pdu_data) + header_len);
 
         /* check to see how many refusals we should do. */
-        if(connection->cip_connection.reject_fo_count > 0) {
-            connection->cip_connection.reject_fo_count--;
+        if(connection->reject_fo_count > 0) {
+            connection->reject_fo_count--;
 
-            info("Forward open request being bounced for debugging. %d to go.", connection->cip_connection.reject_fo_count);
+            info("Forward open request being bounced for debugging. %d to go.", connection->reject_fo_count);
 
-            make_cip_error(response,
-                           (uint8_t)(buf_get_uint8(request) | CIP_DONE),
-                           (uint8_t)CIP_ERR_FLAG,
-                           true,
-                           (uint16_t)CIP_ERR_EX_DUPLICATE_CONN
-                          );
-
-            rc = STATUS_OK;
-
+            cip_status = CIP_ERR_COMMS;
+            ext_status_word_count = 1;
+            ext_status_words[0] = CIP_ERR_EX_DUPLICATE_CONN;
             break;
         }
 
+        /* make sure that there is enough room for the target EPATH */
+        required_request_size += (fo_args->target_epath_word_count * 2);
+
+        assert_warn((slice_get_len(encoded_pdu_data) >= required_request_size), STATUS_NO_RESOURCE, "Insufficient data for full Forward Open request!");
+
+
+
         /* all good if we got here. Save some values to the persistent connection state. */
-        connection->cip_connection.client_connection_id = forward_open.client_conn_id;
-        connection->cip_connection.client_connection_serial_number = forward_open.conn_serial_number;
-        connection->cip_connection.client_vendor_id = forward_open.orig_vendor_id;
-        connection->cip_connection.client_serial_number = forward_open.orig_serial_number;
-        connection->cip_connection.client_to_server_rpi = forward_open.client_to_server_rpi;
-        connection->cip_connection.server_to_client_rpi = forward_open.server_to_client_rpi;
-        connection->cip_connection.server_connection_id = (uint32_t)rand();
-        connection->cip_connection.server_connection_seq = (uint16_t)rand();
+        connection->client_connection_id = le2h32(fo_args->orig_to_targ_conn_id);
+        // connection->client_connection_serial_number = fo_args->conn_serial_number;
+        // connection->client_vendor_id = fo_args->orig_vendor_id;
+        // connection->client_serial_number = fo_args->orig_serial_number;
+        // connection->client_to_server_rpi = fo_args->client_to_server_rpi;
+        // connection->server_to_client_rpi = fo_args->server_to_client_rpi;
+        connection->server_connection_id = (uint32_t)rand();
+        connection->server_connection_seq = (uint16_t)rand();
 
         /* calculate the allowed packet sizes. */
-        connection->cip_connection.client_to_server_max_packet = (forward_open.client_to_server_conn_params &
+        connection->client_to_server_max_packet = (forward_open.client_to_server_conn_params &
                                 ((forward_open.forward_open_service == CIP_SERVICE_FORWARD_OPEN) ? 0x1FF : 0x0FFF)) + 64; /* MAGIC */
         connection->cip_connection.server_to_client_max_packet = forward_open.server_to_client_conn_params &
                                 ((forward_open.forward_open_service == CIP_SERVICE_FORWARD_OPEN) ? 0x1FF : 0x0FFF);
@@ -372,6 +306,20 @@ status_t process_forward_open(cip_req_p cip_req, uint32_t pdu_start, plc_connect
         buf_set_uint8(response, 0);
         buf_set_uint8(response, 0);
     } while(0);
+
+    if(cip_status != CIP_OK) {
+        warn("Forward Open request unable to be processed!");
+
+        make_cip_error(encoded_pdu_data,
+                       (uint8_t)(CIP_SERVICE_FORWARD_OPEN | CIP_DONE),
+                       (uint8_t)cip_status,
+                       ext_status_word_count,
+                       ext_status_words,
+                      );
+
+        rc = STATUS_OK;
+    }
+
 
     return rc;
 }
@@ -1087,20 +1035,41 @@ int match_path(slice_p pdu, bool need_pad, uint8_t *path, uint8_t path_len)
 
 
 
-bool make_cip_error(slice_p response, uint8_t cip_cmd, uint8_t cip_err, bool extend, uint16_t extended_error)
+status_t make_cip_error(slice_p encoded_pdu_data, uint8_t cip_cmd, uint8_t cip_err, int8_t num_extended_status_words, uint16_t *extended_status_words)
 {
-    /* cursor is set higher up in the call chain */
+    status_t rc = STATUS_OK;
+    cip_response_header_t *response = NULL;
 
-    buf_set_uint8(response, cip_cmd | CIP_DONE);
-    buf_set_uint8(response, 0); /* reserved, must be zero. */
-    buf_set_uint8(response, cip_err);
+    do {
+        /* check size */
+        if(slice_get_len(encoded_pdu_data) < (sizeof(*response) + (num_extended_status_words * sizeof(uint16_t)))) {
+            /* this one we need to pass back. */
+            rc = STATUS_NO_RESOURCE;
+            break;
+        }
 
-    if(extend) {
-        buf_set_uint8(response, 2); /* two bytes of extended status. */
-        buf_set_uint16_le(response, extended_error);
-    } else {
-        buf_set_uint8(response, 0); /* no additional bytes of sub-error. */
-    }
+        /* overlay */
+        response = (cip_response_header_t *)slice_get_start(encoded_pdu_data);
 
-    return true;
+        response->service = cip_cmd | CIP_DONE;
+        response->reserved = 0;
+        response->status = cip_err;
+        response->ext_status_word_count = num_extended_status_words;
+
+        if(num_extended_status_words > 0) {
+            for(uint8_t i=0; i < num_extended_status_words; i++) {
+                response->ext_status_words[i] = h2le16(extended_status_words[i]);
+            }
+        }
+
+        /* cap the response. */
+        slice_set_end(encoded_pdu_data, slice_get_start(encoded_pdu_data) + sizeof(*response) + (num_extended_status_words * sizeof(uint16_t)));
+
+        info("CIP error packet:");
+        debug_dump_ptr(DEBUG_INFO, slice_get_start(encoded_pdu_data), slice_get_end(encoded_pdu_data));
+
+        rc = STATUS_OK;
+    } while(0);
+
+    return rc;
 }
