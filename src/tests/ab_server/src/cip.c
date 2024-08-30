@@ -270,21 +270,40 @@ status_t cip_process_forward_open(slice_p encoded_pdu_data, uint32_t header_len,
 
 
 
-        /* all good if we got here. Save some values to the persistent connection state. */
+        /* Save some values to the persistent connection state. */
         connection->client_connection_id = le2h32(fo_args->orig_to_targ_conn_id);
-        // connection->client_connection_serial_number = fo_args->conn_serial_number;
-        // connection->client_vendor_id = fo_args->orig_vendor_id;
-        // connection->client_serial_number = fo_args->orig_serial_number;
-        // connection->client_to_server_rpi = fo_args->client_to_server_rpi;
-        // connection->server_to_client_rpi = fo_args->server_to_client_rpi;
-        connection->server_connection_id = (uint32_t)rand();
-        connection->server_connection_seq = (uint16_t)rand();
+        connection->client_connection_serial_number = le2h16(o_args->conn_serial_number);
+        connection->client_vendor_id = le2h16(fo_args->orig_vendor_id);
+        connection->client_serial_number = le2h32(fo_args->orig_serial_number);
+        connection->client_to_server_rpi = fo_args->client_to_server_rpi;
+        connection->server_to_client_rpi = fo_args->server_to_client_rpi;
+
+
+        connection->secs_per_tick = fo_args->secs_per_tick;
+        connection->timeout_ticks = fo_args->timeout_ticks;
+        connection->orig_to_targ_conn_id = le2h32(fo_args->orig_to_targ_conn_id);
+        connection->targ_to_orig_conn_id = (uint32_t)rand();
+        connection->conn_serial_number = le2h16(fo_args->conn_serial_number);
+        connection->orig_vendor_id = le2h16(fo_args->orig_vendor_id);
+        connection->orig_serial_number = le2h32(fo_args->orig_serial_number);
+        connection->conn_timeout_multiplier = fo_args->conn_timeout_multiplier;
+        connection->orig_to_targ_rpi = le2h32(fo_args->orig_to_targ_rpi);
+        connection->orig_to_targ_conn_params = le2h16(fo_args->orig_to_targ_conn_params);
+        connection->targ_to_orig_rpi = le2h32(fo_args->targ_to_orig_rpi);
+        connection->targ_to_orig_conn_params = le2h16(fo_args->targ_to_orig_conn_params);
+        connection->transport_class = fo_args->transport_class;
+
+        connection->orig_to_targ_conn_seq = 0;
+        connection->targ_to_orig_conn_seq = (uint16_t)rand();
+
 
         /* calculate the allowed packet sizes. */
-        connection->client_to_server_max_packet = (forward_open.client_to_server_conn_params &
-                                ((forward_open.forward_open_service == CIP_SERVICE_FORWARD_OPEN) ? 0x1FF : 0x0FFF)) + 64; /* MAGIC */
-        connection->cip_connection.server_to_client_max_packet = forward_open.server_to_client_conn_params &
-                                ((forward_open.forward_open_service == CIP_SERVICE_FORWARD_OPEN) ? 0x1FF : 0x0FFF);
+        connection->client_to_server_max_packet = le2h16(fo_args->orig_to_targ_conn_params) & 0x1FF + 64; /* MAGIC */
+        connection->server_to_client_max_packet = le2h16(fo_args->targ_to_orig_conn_params) & 0x1FF;
+
+
+        /* now fill in the response */
+
 
         /* FIXME - check that the packet sizes are valid 508 or 4002 */
 

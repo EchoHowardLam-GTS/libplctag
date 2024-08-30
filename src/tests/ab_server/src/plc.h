@@ -128,12 +128,24 @@ typedef struct {
     uint8_t path_len;
 
     /* CIP connection info */
-    bool has_cip_connection;
+    // bool has_cip_connection;
 
-    uint32_t client_connection_id;
-    uint16_t client_connection_seq;
-    uint32_t server_connection_id;
-    uint16_t server_connection_seq;
+    uint8_t secs_per_tick;
+    uint8_t timeout_ticks;
+    uint32_t orig_to_targ_conn_id;
+    uint32_t targ_to_orig_conn_id;
+    uint16_t conn_serial_number;
+    uint16_t orig_vendor_id;
+    uint32_t orig_serial_number;
+    uint8_t conn_timeout_multiplier;
+    uint32_t orig_to_targ_rpi;
+    uint16_t orig_to_targ_conn_params;
+    uint32_t targ_to_orig_rpi;
+    uint16_t targ_to_orig_conn_params;
+    uint8_t transport_class;
+
+    uint16_t orig_to_targ_conn_seq;
+    uint16_t targ_to_orig_conn_seq;
 
     /* debugging */
     uint32_t response_delay;
@@ -146,15 +158,15 @@ typedef struct {
 typedef plc_connection_t *plc_connection_p;
 
 
-struct pdu_t {
-    slice_t request_header_slice;
-    slice_t request_payload_slice;
-    slice_t response_header_slice;
-    slice_t response_payload_slice;
-};
+// struct pdu_t {
+//     slice_t request_header_slice;
+//     slice_t request_payload_slice;
+//     slice_t response_header_slice;
+//     slice_t response_payload_slice;
+// };
 
-typedef struct pdu_t pdu_t;
-typedef pdu_t *pdu_p;
+// typedef struct pdu_t pdu_t;
+// typedef pdu_t *pdu_p;
 
 
 extern status_t clean_up_plc_connection_data(app_connection_data_p app_connection_data, app_data_p app_data);
