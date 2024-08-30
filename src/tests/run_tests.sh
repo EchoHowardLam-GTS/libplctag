@@ -85,6 +85,7 @@ else
     let SUCCESSES++
 fi
 
+
 let TEST++
 echo -n "Test $TEST: test standard strings... "
 $TEST_DIR/string_standard > "${TEST}_standard_string_test.log" 2>&1
@@ -98,7 +99,7 @@ fi
 
 let TEST++
 echo -n "Test $TEST: test non-standard UDT strings... "
-$TEST_DIR/string_standard > "${TEST}_non_standard_udt_string_test.log" 2>&1
+$TEST_DIR/string_non_standard_udt > "${TEST}_non_standard_udt_string_test.log" 2>&1
 if [ $? != 0 ]; then
     echo "FAILURE"
     let FAILURES++
