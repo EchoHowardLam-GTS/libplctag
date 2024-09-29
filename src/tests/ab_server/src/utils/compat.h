@@ -67,3 +67,47 @@
 #else
     #include <sys/types.h>
 #endif
+
+
+#ifdef IS_WINDOWS
+    #ifdef _MSC_VER
+        /* MS Visual Studio C compiler. */
+        #ifndef START_PACK
+            #define START_PACK __pragma( pack(push, 1) )
+        #endif
+
+        #ifndef END_PACK
+            #define END_PACK   __pragma( pack(pop) )
+        #endif
+
+        #ifndef __PRETTY_FUNCTION__
+            #define __PRETTY_FUNCTION__ __FUNCTION__
+        #endif
+    #else
+        /* MinGW on Windows. */
+        #ifndef START_PACK
+            #define START_PACK
+        #endif
+
+        #ifndef END_PACK
+            #define END_PACK  __attribute__((packed))
+        #endif
+
+        #ifndef __PRETTY_FUNCTION__
+            #define __PRETTY_FUNCTION__  __func__
+        #endif
+    #endif
+#else
+    /* GCC, Clang */
+    #ifndef START_PACK
+        #define START_PACK
+    #endif
+
+    #ifndef END_PACK
+        #define END_PACK  __attribute__((packed))
+    #endif
+
+    #ifndef __PRETTY_FUNCTION__
+        #define __PRETTY_FUNCTION__  __func__
+    #endif
+#endif

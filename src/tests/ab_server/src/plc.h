@@ -37,7 +37,7 @@
 #include <stdint.h>
 
 #include "utils/mutex_compat.h"
-#include "utils/tcp_server.h"
+// #include "utils/tcp_server.h"
 
 // #include "eip.h"
 // #include "cpf.h"
@@ -153,9 +153,9 @@ typedef struct {
 
     /* buffer for requests and responses */
     uint8_t pdu_data_buffer[MAX_DEVICE_BUFFER_SIZE];
-} plc_connection_t;
+} plc_t;
 
-typedef plc_connection_t *plc_connection_p;
+typedef plc_t *plc_p;
 
 
 // struct pdu_t {
@@ -169,29 +169,10 @@ typedef plc_connection_t *plc_connection_p;
 // typedef pdu_t *pdu_p;
 
 
-extern status_t clean_up_plc_connection_data(app_connection_data_p app_connection_data, app_data_p app_data);
-extern status_t init_plc_connection_data(app_connection_data_p app_connection_data, app_data_p app_data);
+// extern status_t clean_up_plc_connection_data(app_connection_data_p app_connection_data, app_data_p app_data);
+// extern status_t init_plc_connection_data(app_connection_data_p app_connection_data, app_data_p app_data);
 
 
-
-#ifdef IS_WINDOWS
-    #ifdef _MSC_VER
-        /* MS Visual Studio C compiler. */
-        #define START_PACK __pragma( pack(push, 1) )
-        #define END_PACK   __pragma( pack(pop) )
-        #define __PRETTY_FUNCTION__ __FUNCTION__
-    #else
-        /* MinGW on Windows. */
-        #define START_PACK
-        #define END_PACK  __attribute__((packed))
-        #define __PRETTY_FUNCTION__  __func__
-    #endif
-#else
-    /* GCC, Clang */
-    #define START_PACK
-    #define END_PACK  __attribute__((packed))
-    #define __PRETTY_FUNCTION__  __func__
-#endif
 
 
 START_PACK typedef struct {

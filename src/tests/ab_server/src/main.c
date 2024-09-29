@@ -43,12 +43,12 @@
 #include "arg_parser.h"
 #include "utils/compat.h"
 #include "utils/debug.h"
+#include "utils/net_event.h"
 #include "utils/slice.h"
 #include "utils/status.h"
-#include "utils/tcp_server.h"
+// #include "utils/tcp_server.h"
 #include "utils/time_utils.h"
 
-static plc_connection_t template_plc_connection = {0};
 
 static void usage(void);
 // static tcp_connection_p allocate_client(void *template_connection_arg);
@@ -138,11 +138,31 @@ void setup_break_handler(void)
 bool program_terminating(app_data_p app_data);
 void terminate_program(app_data_p app_data);
 
+static net_event_callback_result_t event_manager_on_dispose_cb(struct net_event_manager_t *event_manager, void *app_data);
+static net_event_callback_result_t event_manager_on_start_cb(struct net_event_manager_t *event_manager, void *app_data);
+static net_event_callback_result_t event_manager_on_stop_cb(struct net_event_manager_t *event_manager, void *app_data);
+static net_event_callback_result_t event_manager_on_tick_cb(struct net_event_manager_t *event_manager, void *app_data);
+static net_event_callback_result_t event_manager_on_wake_cb(struct net_event_manager_t *event_manager, void *app_data);
+
+
+static net_event_callback_result_t listener_socket_on_accepted_cb(struct net_event_socket_t *socket, struct net_event_socket_t *client_socket, status_t status, void *app_data, void *socket_data);
+static net_event_callback_result_t listener_socket_on_close_cb(struct net_event_socket_t *socket, status_t status, void *app_data, void *socket_data);
+static net_event_callback_result_t client_socket_on_close_cb(struct net_event_socket_t *socket, status_t status, void *app_data, void *socket_data);
+static net_event_callback_result_t client_socket_on_received_cb(struct net_event_socket_t *socket, const char *sender_ip, uint16_t sender_port, struct buf_t *buffer, status_t status, void *app_data, void *socket_data);
+static net_event_callback_result_t client_socket_on_sent_cb(struct net_event_socket_t *socket, struct buf_t *buffer, status_t status, void *app_data, void *socket_data);
+static net_event_callback_result_t socket_on_tick_cb(struct net_event_socket_t *socket, status_t status, void *app_data, void *socket_data);
+static net_event_callback_result_t socket_on_wake_cb(struct net_event_socket_t *socket, status_t status, void *app_data, void *socket_data);
+
 
 
 int main(int argc, const char **argv)
 {
-    tcp_server_config_t server_config = {0};
+    plc_t plc = {0};
+    struct net_event_manager_cb_t event_manager_cb;
+    struct net_event_socket_cb_t listener_cb = {0};
+    struct net_event_socket_cb_t client_cb = {0};
+    struct net_event_manager_t *event_manager = NULL;
+    struct net_event_socket_t *listener_socket = NULL;
 
     /* set up handler for ^C etc. */
     setup_break_handler();
@@ -152,24 +172,58 @@ int main(int argc, const char **argv)
     /* set the random seed. */
     srand((unsigned int)util_time_ms());
 
-    if(!process_args(argc, argv, &template_plc_connection)) {
+    if(!process_args(argc, argv, &plc)) {
         usage();
     }
 
-    server_config.host = "0.0.0.0";
-    server_config.port = (template_plc_connection.port_string ? template_plc_connection.port_string : "44818");
+    event_manager_cb.on_dispose_cb = event_manager_on_dispose_cb;
+    event_manager_cb.on_start_cb = event_manager_on_start_cb;
+    event_manager_cb.on_stop_cb = event_manager_on_stop_cb;
+    event_manager_cb.on_tick_cb = event_manager_on_tick_cb;
+    event_manager_cb.on_wake_cb = event_manager_on_wake_cb;
 
-    server_config.app_connection_data_size = sizeof(plc_connection_t);
-    server_config.app_data = (app_data_p)&template_plc_connection;
-    server_config.buffer_size = MAX_DEVICE_BUFFER_SIZE;
-    server_config.clean_up_app_connection_data = clean_up_plc_connection_data;
-    server_config.init_app_connection_data = init_plc_connection_data;
-    server_config.process_request = eip_process_pdu;
-    server_config.program_terminating = program_terminating;
-    server_config.terminate_program = terminate_program;
+    event_manager = net_event_manager_create(100, &plc, &event_manager_cb);
+    if(!event_manager) {
+        warn("Unable to allocate memory for new event manager!");
+        usage();
+    }
 
-    /* open a server connection and listen on the right port. */
-    tcp_server_run(&server_config);
+    net_event_manager_start(event_manager);
+    // FIXME - check status!
+
+    listener_cb.on_accepted_cb = listener_socket_on_accepted_cb;
+    listener_cb.on_close_cb = listener_socket_on_close_cb;
+    listener_cb.on_tick_cb = socket_on_tick_cb;
+    listener_cb.on_wake_cb = socket_on_wake_cb;
+
+    client_cb.on_close_cb = client_socket_on_close_cb;
+    client_cb.on_received_cb = client_socket_on_received_cb;
+    client_cb.on_sent_cb = client_socket_on_sent_cb;
+    client_cb.on_tick_cb = socket_on_tick_cb;
+    client_cb.on_wake_cb = socket_on_wake_cb;
+
+    listener_socket = net_event_socket_open(event_manager, NET_EVENT_SOCKET_TYPE_TCP_LISTENER, "0.0.0.0", 44818, &client_cb, &listener_cb);
+    if(!event_manager) {
+        warn("Unable to allocate memory for new listener socket!");
+        usage();
+    }
+
+
+
+    // server_config.host = "0.0.0.0";
+    // server_config.port = (plc.port_string ? plc.port_string : "44818");
+
+    // server_config.app_connection_data_size = sizeof(plc_t);
+    // server_config.app_data = (app_data_p)&plc;
+    // server_config.buffer_size = MAX_DEVICE_BUFFER_SIZE;
+    // server_config.clean_up_app_connection_data = clean_up_plc_connection_data;
+    // server_config.init_app_connection_data = init_plc_connection_data;
+    // server_config.process_request = eip_process_pdu;
+    // server_config.program_terminating = program_terminating;
+    // server_config.terminate_program = terminate_program;
+
+    // /* open a server connection and listen on the right port. */
+    // tcp_server_run(&server_config);
 
     return 0;
 }
@@ -245,4 +299,185 @@ bool program_terminating(app_data_p app_data)
 void terminate_program(app_data_p app_data)
 {
     (void)app_data;
+}
+
+
+
+net_event_callback_result_t event_manager_on_dispose_cb(struct net_event_manager_t *event_manager, void *app_data)
+{
+    net_event_callback_result_t rc = NET_EVENT_CALLBACK_RESULT_RESET;
+
+    info("Starting.");
+
+
+    info("Done with status %s.", rc == NET_EVENT_CALLBACK_RESULT_RESET ? "Reset event" : "Clear event";
+
+    return rc;
+}
+
+
+net_event_callback_result_t event_manager_on_start_cb(struct net_event_manager_t *event_manager, void *app_data)
+{
+    net_event_callback_result_t rc = NET_EVENT_CALLBACK_RESULT_RESET;
+
+    info("Starting.");
+
+
+    info("Done with status %s.", rc == NET_EVENT_CALLBACK_RESULT_RESET ? "Reset event" : "Clear event";
+
+    return rc;
+}
+
+
+
+net_event_callback_result_t event_manager_on_stop_cb(struct net_event_manager_t *event_manager, void *app_data)
+{
+    net_event_callback_result_t rc = NET_EVENT_CALLBACK_RESULT_RESET;
+
+    info("Starting.");
+
+
+    info("Done with status %s.", rc == NET_EVENT_CALLBACK_RESULT_RESET ? "Reset event" : "Clear event";
+
+    return rc;
+}
+
+
+
+net_event_callback_result_t event_manager_on_tick_cb(struct net_event_manager_t *event_manager, void *app_data)
+{
+    net_event_callback_result_t rc = NET_EVENT_CALLBACK_RESULT_RESET;
+
+    info("Starting.");
+
+
+    info("Done with status %s.", rc == NET_EVENT_CALLBACK_RESULT_RESET ? "Reset event" : "Clear event";
+
+    return rc;
+}
+
+
+
+net_event_callback_result_t event_manager_on_wake_cb(struct net_event_manager_t *event_manager, void *app_data)
+{
+    net_event_callback_result_t rc = NET_EVENT_CALLBACK_RESULT_RESET;
+
+    info("Starting.");
+
+
+    info("Done with status %s.", rc == NET_EVENT_CALLBACK_RESULT_RESET ? "Reset event" : "Clear event";
+
+    return rc;
+}
+
+
+
+
+
+net_event_callback_result_t listener_socket_on_accepted_cb(struct net_event_socket_t *socket, struct net_event_socket_t *client_socket, status_t status, void *app_data, void *socket_data)
+{
+    net_event_callback_result_t rc = NET_EVENT_CALLBACK_RESULT_RESET;
+    struct net_event_socket_cb_config_t *client_cb = (struct net_event_socket_cb_config_t *)socket_data;
+
+    info("Starting.");
+
+    if(status != STATUS_OK) {
+        warn("Status %s received!", status_to_str(status));
+
+         /* shutdown everything */
+    }
+
+    detail("Setting client socket callbacks.")
+    net_event_socket_set_cb_config(client_socket, client_cb);
+
+
+
+
+    info("Done with status %s.", rc == NET_EVENT_CALLBACK_RESULT_RESET ? "Reset event" : "Clear event";
+
+    return rc;
+}
+
+
+
+net_event_callback_result_t listener_socket_on_close_cb(struct net_event_socket_t *socket, status_t status, void *app_data, void *socket_data)
+{
+    net_event_callback_result_t rc = NET_EVENT_CALLBACK_RESULT_RESET;
+
+    info("Starting.");
+
+
+    info("Done with status %s.", rc == NET_EVENT_CALLBACK_RESULT_RESET ? "Reset event" : "Clear event";
+
+    return rc;
+}
+
+
+
+net_event_callback_result_t client_socket_on_close_cb(struct net_event_socket_t *socket, status_t status, void *app_data, void *socket_data)
+{
+    net_event_callback_result_t rc = NET_EVENT_CALLBACK_RESULT_RESET;
+
+    info("Starting.");
+
+
+    info("Done with status %s.", rc == NET_EVENT_CALLBACK_RESULT_RESET ? "Reset event" : "Clear event";
+
+    return rc;
+}
+
+
+
+net_event_callback_result_t client_socket_on_received_cb(struct net_event_socket_t *socket, const char *sender_ip, uint16_t sender_port, struct buf_t *buffer, status_t status, void *app_data, void *socket_data)
+{
+    net_event_callback_result_t rc = NET_EVENT_CALLBACK_RESULT_RESET;
+
+    info("Starting.");
+
+
+    info("Done with status %s.", rc == NET_EVENT_CALLBACK_RESULT_RESET ? "Reset event" : "Clear event";
+
+    return rc;
+}
+
+
+
+net_event_callback_result_t client_socket_on_sent_cb(struct net_event_socket_t *socket, struct buf_t *buffer, status_t status, void *app_data, void *socket_data)
+{
+    net_event_callback_result_t rc = NET_EVENT_CALLBACK_RESULT_RESET;
+
+    info("Starting.");
+
+
+    info("Done with status %s.", rc == NET_EVENT_CALLBACK_RESULT_RESET ? "Reset event" : "Clear event";
+
+    return rc;
+}
+
+
+
+net_event_callback_result_t socket_on_tick_cb(struct net_event_socket_t *socket, status_t status, void *app_data, void *socket_data)
+{
+    net_event_callback_result_t rc = NET_EVENT_CALLBACK_RESULT_RESET;
+
+    info("Starting.");
+
+
+    info("Done with status %s.", rc == NET_EVENT_CALLBACK_RESULT_RESET ? "Reset event" : "Clear event";
+
+    return rc;
+}
+
+
+
+net_event_callback_result_t socket_on_wake_cb(struct net_event_socket_t *socket, status_t status, void *app_data, void *socket_data)
+{
+    net_event_callback_result_t rc = NET_EVENT_CALLBACK_RESULT_RESET;
+
+    info("Starting.");
+
+
+    info("Done with status %s.", rc == NET_EVENT_CALLBACK_RESULT_RESET ? "Reset event" : "Clear event";
+
+    return rc;
 }
