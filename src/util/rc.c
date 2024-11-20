@@ -263,7 +263,8 @@ void refcount_cleanup(refcount_p rc)
     rc->cleanup_func((void *)(rc+1));
 
     /* finally done. */
-    mem_free(rc);
+    // mem_free(rc);
+    //mem_free(rc);
 
     pdebug(DEBUG_INFO,"Done.");
 }

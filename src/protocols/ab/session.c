@@ -2561,8 +2561,10 @@ void request_destroy(void *req_arg)
     req->abort_request = 1;
 
     if(req->data) {
-        mem_free(req->data);
-        req->data = NULL;
+        //mem_free(req->data);
+        //req->data = NULL;
+        // mem_free(req->data);
+        // req->data = NULL;
     }
 
     pdebug(DEBUG_DETAIL, "Done.");
