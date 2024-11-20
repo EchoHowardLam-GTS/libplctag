@@ -62,8 +62,8 @@ START_PACK typedef struct {
     uint8_t pccc_status;            /* STS 0x00 in request */
     uint16_le pccc_seq_num;          /* TNS transaction/sequence id */
     uint8_t pccc_function;          /* FNC sub-function of command */
-    uint16_le pccc_offset;           /* offset of requested in total request */
-    uint16_le pccc_transfer_size;    /* total number of words requested */
+    //uint16_le pccc_offset;           /* offset of requested in total request */
+    //uint16_le pccc_transfer_size;    /* total number of words requested */
 } END_PACK embedded_pccc;
 
 
@@ -178,6 +178,8 @@ int tag_read_start(ab_tag_p tag)
     embedded_pccc *embed_pccc;
     uint8_t *data;
     uint8_t *embed_start;
+    uint16_le transfer_offset = h2le16(0);
+    uint16_le transfer_size = h2le16(0);
 
     pdebug(DEBUG_INFO,"Starting");
 
@@ -256,11 +258,20 @@ int tag_read_start(ab_tag_p tag)
     embed_pccc->pccc_status = 0;  /* STS 0 in request */
     embed_pccc->pccc_seq_num = h2le16(conn_seq_id); /* TODO - get sequence ID from session? */
     embed_pccc->pccc_function = AB_EIP_PCCCLGX_TYPED_READ_FUNC;
-    embed_pccc->pccc_offset = h2le16((uint16_t)0);
-    embed_pccc->pccc_transfer_size = h2le16((uint16_t)tag->elem_count); /* This is the offset items */
+    //embed_pccc->pccc_offset = h2le16((uint16_t)0);
+    //embed_pccc->pccc_transfer_size = h2le16((uint16_t)tag->elem_count); /* This is the offset items */
 
     /* point to the end of the struct */
     data = (uint8_t *)(embed_pccc + 1);
+
+    /* this kind of PCCC function takes an offset and size. */
+    transfer_offset = h2le16((uint16_t)0);
+    mem_copy(data, &transfer_offset, (int)(unsigned int)sizeof(transfer_offset));
+    data += sizeof(transfer_offset);
+
+    transfer_size = h2le16((uint16_t)tag->elem_count);
+    mem_copy(data, &transfer_size, (int)(unsigned int)sizeof(transfer_size));
+    data += sizeof(transfer_size);
 
     /* copy encoded tag name into the request */
     mem_copy(data,tag->encoded_name,tag->encoded_name_size);
@@ -513,6 +524,8 @@ int tag_write_start(ab_tag_p tag)
     uint8_t *data;
     uint16_t conn_seq_id = (uint16_t)(session_get_new_seq_id(tag->session));;
     ab_request_p req = NULL;
+    uint16_le transfer_offset = h2le16((uint16_t)0);
+    uint16_le transfer_size = h2le16((uint16_t)0);
     uint8_t *embed_start;
     int overhead, data_per_packet;
 
@@ -545,8 +558,8 @@ int tag_write_start(ab_tag_p tag)
                  +1  /* PCCC status */
                  +2  /* PCCC sequence number */
                  +1  /* PCCC function */
-                 +2  /* request offset */
-                 +2  /* request total transfer size in elements. */
+                 +2  /* request offset might not apply for bit write */
+                 +2  /* request total transfer size in elements. might not apply for bit write */
                  + (tag->encoded_name_size)
                  +2; /* actual request size in elements */
 
@@ -597,24 +610,84 @@ int tag_write_start(ab_tag_p tag)
     embed_pccc->pccc_command = AB_EIP_PCCC_TYPED_CMD;
     embed_pccc->pccc_status = 0;  /* STS 0 in request */
     embed_pccc->pccc_seq_num = h2le16(conn_seq_id); /* TODO - get sequence ID from session? */
-    embed_pccc->pccc_function = AB_EIP_PCCCLGX_TYPED_WRITE_FUNC;
-    embed_pccc->pccc_offset = h2le16(0);
-    embed_pccc->pccc_transfer_size = h2le16((uint16_t)tag->elem_count); /* This is the offset items */
+    embed_pccc->pccc_function = (tag->is_bit ? AB_EIP_PCCCLGX_BIT_WRITE_FUNC : AB_EIP_PCCCLGX_TYPED_WRITE_FUNC);
+    //embed_pccc->pccc_offset = h2le16(0);
+    //embed_pccc->pccc_transfer_size = h2le16((uint16_t)tag->elem_count); /* This is the offset items */
 
     /* point to the end of the struct */
     data = (uint8_t *)(embed_pccc + 1);
+
+    /* this kind of PCCC function takes an offset and size.  Only if not a bit tag. */
+    if(!tag->is_bit) {
+        transfer_offset = h2le16((uint16_t)0);
+        mem_copy(data, &transfer_offset, (int)(unsigned int)sizeof(transfer_offset));
+        data += sizeof(transfer_offset);
+
+        transfer_size = h2le16((uint16_t)tag->elem_count);
+        mem_copy(data, &transfer_size, (int)(unsigned int)sizeof(transfer_size));
+        data += sizeof(transfer_size);
+    }
 
     /* copy encoded name  into the request */
     mem_copy(data, tag->encoded_name, tag->encoded_name_size);
     data += tag->encoded_name_size;
 
     /* copy the type info from the read. */
-    mem_copy(data, tag->encoded_type_info, tag->encoded_type_info_size);
-    data += tag->encoded_type_info_size;
+    if(!tag->is_bit) {
+        mem_copy(data, tag->encoded_type_info, tag->encoded_type_info_size);
+        data += tag->encoded_type_info_size;
+    }
 
     /* now copy the data to write */
-    mem_copy(data,tag->data,tag->size);
-    data += tag->size;
+    if(!tag->is_bit) {
+        mem_copy(data, tag->data, tag->size);
+        data += tag->size;
+    } else {
+        /* OR/set mask: if mask bit == 1 then the bit is set to 1 */
+        for(int i=0; i < tag->elem_size; i++) {
+            if((tag->bit / 8) == i) {
+                /* only set if the tag data bit is set */
+                *data = tag->data[i] & (uint8_t)(1 << (tag->bit % 8));
+
+                pdebug(DEBUG_DETAIL, "adding set mask byte %d: %x", i, *data);
+
+                data++;
+            } else {
+                /* this is not the data we care about. */
+                *data = (uint8_t)0x00;
+
+                pdebug(DEBUG_DETAIL, "adding set mask byte %d: %x", i, *data);
+
+                data++;
+            }
+        }
+
+        /* reset mask: if mask bit == 1 then the bit is set to 0 */
+        for(int i=0; i < tag->elem_size; i++) {
+            if((tag->bit / 8) == i) {
+                /* only reset if the tag data bit is not set */
+                uint8_t mask = (uint8_t)(1 << (tag->bit % 8));
+
+                /* _unset_ if the bit is not set. */
+                if(tag->data[i] & mask) {
+                    *data = (uint8_t)0x00;
+                } else {
+                    *data = (uint8_t)mask;
+                }
+
+                pdebug(DEBUG_DETAIL, "adding reset mask byte %d: %x", i, *data);
+
+                data++;
+            } else {
+                /* this is not the data we care about. */
+                *data = (uint8_t)0x00;
+
+                pdebug(DEBUG_DETAIL, "adding reset mask byte %d: %x", i, *data);
+
+                data++;
+            }
+        }
+    }
 
     /* if this is not an multiple of 16-bit chunks, pad it out */
     if((data - embed_start) & 0x01) {

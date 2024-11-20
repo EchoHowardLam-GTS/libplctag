@@ -488,8 +488,8 @@ int tag_write_start(ab_tag_p tag)
                  +1  /* pccc status */
                  +2  /* pccc sequence num */
                  +1  /* pccc function */
-                 +2  /* transfer offset, in words? */
-                 +2  /* total transfer size in words */
+                 +2  /* transfer offset, in words? might not apply for bit write */
+                 +2  /* total transfer size in words might not apply for bit write */
                  +tag->encoded_name_size
                  +1; /* size in bytes of this write */
 
