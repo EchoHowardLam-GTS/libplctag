@@ -610,7 +610,7 @@ int tag_write_start(ab_tag_p tag)
     embed_pccc->pccc_command = AB_EIP_PCCC_TYPED_CMD;
     embed_pccc->pccc_status = 0;  /* STS 0 in request */
     embed_pccc->pccc_seq_num = h2le16(conn_seq_id); /* TODO - get sequence ID from session? */
-    embed_pccc->pccc_function = (tag->is_bit ? AB_EIP_PCCCLGX_BIT_WRITE_FUNC : AB_EIP_PCCCLGX_TYPED_WRITE_FUNC);
+    embed_pccc->pccc_function = (tag->is_bit ? AB_EIP_PCCCLGX_RMW_FUNC : AB_EIP_PCCCLGX_TYPED_WRITE_FUNC);
     //embed_pccc->pccc_offset = h2le16(0);
     //embed_pccc->pccc_transfer_size = h2le16((uint16_t)tag->elem_count); /* This is the offset items */
 
@@ -643,46 +643,41 @@ int tag_write_start(ab_tag_p tag)
         mem_copy(data, tag->data, tag->size);
         data += tag->size;
     } else {
-        /* OR/set mask: if mask bit == 1 then the bit is set to 1 */
+        /* AND mask: if mask bit == 0 then the bit is set to 0 */
         for(int i=0; i < tag->elem_size; i++) {
             if((tag->bit / 8) == i) {
-                /* only set if the tag data bit is set */
-                *data = tag->data[i] & (uint8_t)(1 << (tag->bit % 8));
+                /* Always reset the tag data bit since OR mask will set it later on */
+                uint8_t mask = (uint8_t)(1 << (tag->bit % 8));
 
-                pdebug(DEBUG_DETAIL, "adding set mask byte %d: %x", i, *data);
+                *data = ((uint8_t)0xFF) ^ mask;
+
+                pdebug(DEBUG_DETAIL, "adding AND mask byte %d: %x", i, *data);
 
                 data++;
             } else {
                 /* this is not the data we care about. */
-                *data = (uint8_t)0x00;
+                *data = (uint8_t)0xFF;
 
-                pdebug(DEBUG_DETAIL, "adding set mask byte %d: %x", i, *data);
+                pdebug(DEBUG_DETAIL, "adding AND mask byte %d: %x", i, *data);
 
                 data++;
             }
         }
 
-        /* reset mask: if mask bit == 1 then the bit is set to 0 */
+        /* OR mask: if mask bit == 1 then the bit is set to 1 */
         for(int i=0; i < tag->elem_size; i++) {
             if((tag->bit / 8) == i) {
-                /* only reset if the tag data bit is not set */
-                uint8_t mask = (uint8_t)(1 << (tag->bit % 8));
+                /* The value at target bit will always be tag data bit's value */
+                *data = tag->data[i] & (uint8_t)(1 << (tag->bit % 8));
 
-                /* _unset_ if the bit is not set. */
-                if(tag->data[i] & mask) {
-                    *data = (uint8_t)0x00;
-                } else {
-                    *data = (uint8_t)mask;
-                }
-
-                pdebug(DEBUG_DETAIL, "adding reset mask byte %d: %x", i, *data);
+                pdebug(DEBUG_DETAIL, "adding OR mask byte %d: %x", i, *data);
 
                 data++;
             } else {
                 /* this is not the data we care about. */
                 *data = (uint8_t)0x00;
 
-                pdebug(DEBUG_DETAIL, "adding reset mask byte %d: %x", i, *data);
+                pdebug(DEBUG_DETAIL, "adding OR mask byte %d: %x", i, *data);
 
                 data++;
             }
