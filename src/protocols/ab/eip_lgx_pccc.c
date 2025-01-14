@@ -62,8 +62,6 @@ START_PACK typedef struct {
     uint8_t pccc_status;            /* STS 0x00 in request */
     uint16_le pccc_seq_num;          /* TNS transaction/sequence id */
     uint8_t pccc_function;          /* FNC sub-function of command */
-    uint16_le pccc_offset;           /* offset of requested in total request */
-    uint16_le pccc_transfer_size;    /* total number of words requested */
 } END_PACK embedded_pccc;
 
 
@@ -180,6 +178,8 @@ int tag_read_start(ab_tag_p tag)
     embedded_pccc *embed_pccc;
     uint8_t *data;
     uint8_t *embed_start;
+    uint16_le transfer_offset = h2le16(0); /* offset of requested in total request */
+    uint16_le transfer_size = h2le16(0);   /* total number of words requested */
 
     pdebug(DEBUG_INFO,"Starting");
 
@@ -258,11 +258,17 @@ int tag_read_start(ab_tag_p tag)
     embed_pccc->pccc_status = 0;  /* STS 0 in request */
     embed_pccc->pccc_seq_num = h2le16(conn_seq_id); /* TODO - get sequence ID from session? */
     embed_pccc->pccc_function = AB_EIP_PCCCLGX_TYPED_READ_FUNC;
-    embed_pccc->pccc_offset = h2le16((uint16_t)0);
-    embed_pccc->pccc_transfer_size = h2le16((uint16_t)tag->elem_count); /* This is the offset items */
 
     /* point to the end of the struct */
     data = (uint8_t *)(embed_pccc + 1);
+
+    /* this kind of PCCC function takes an offset and size. */
+    transfer_offset = h2le16((uint16_t)0);
+    mem_copy(data, &transfer_offset, (int)(unsigned int)sizeof(transfer_offset));
+    data += sizeof(transfer_offset);
+    transfer_size = h2le16((uint16_t)tag->elem_count);
+    mem_copy(data, &transfer_size, (int)(unsigned int)sizeof(transfer_size));
+    data += sizeof(transfer_size);
 
     /* copy encoded tag name into the request */
     mem_copy(data,tag->encoded_name,tag->encoded_name_size);
@@ -516,6 +522,8 @@ int tag_write_start(ab_tag_p tag)
     uint16_t conn_seq_id = (uint16_t)(session_get_new_seq_id(tag->session));;
     ab_request_p req = NULL;
     uint8_t *embed_start;
+    uint16_le transfer_offset = h2le16(0); /* offset of requested in total request */
+    uint16_le transfer_size = h2le16(0);   /* total number of words requested */
     int overhead, data_per_packet;
 
     pdebug(DEBUG_INFO,"Starting.");
@@ -551,6 +559,7 @@ int tag_write_start(ab_tag_p tag)
                  +2  /* request total transfer size in elements. */
                  + (tag->encoded_name_size)
                  +2; /* actual request size in elements */
+    /* request offset and request total transfer size in elements are not always needed */
 
     data_per_packet = session_get_max_payload(tag->session) - overhead;
 
@@ -599,24 +608,76 @@ int tag_write_start(ab_tag_p tag)
     embed_pccc->pccc_command = AB_EIP_PCCC_TYPED_CMD;
     embed_pccc->pccc_status = 0;  /* STS 0 in request */
     embed_pccc->pccc_seq_num = h2le16(conn_seq_id); /* TODO - get sequence ID from session? */
-    embed_pccc->pccc_function = AB_EIP_PCCCLGX_TYPED_WRITE_FUNC;
-    embed_pccc->pccc_offset = h2le16(0);
-    embed_pccc->pccc_transfer_size = h2le16((uint16_t)tag->elem_count); /* This is the offset items */
+    embed_pccc->pccc_function = (tag->is_bit ? AB_EIP_PCCCLGX_RMW_FUNC : AB_EIP_PCCCLGX_TYPED_WRITE_FUNC);
 
     /* point to the end of the struct */
     data = (uint8_t *)(embed_pccc + 1);
+
+    /* this kind of PCCC function takes an offset and size.  Only if not a bit tag. */
+    if(!tag->is_bit) {
+        transfer_offset = h2le16((uint16_t)0);
+        mem_copy(data, &transfer_offset, (int)(unsigned int)sizeof(transfer_offset));
+        data += sizeof(transfer_offset);
+        transfer_size = h2le16((uint16_t)tag->elem_count);
+        mem_copy(data, &transfer_size, (int)(unsigned int)sizeof(transfer_size));
+        data += sizeof(transfer_size);
+    }
 
     /* copy encoded name  into the request */
     mem_copy(data, tag->encoded_name, tag->encoded_name_size);
     data += tag->encoded_name_size;
 
     /* copy the type info from the read. */
-    mem_copy(data, tag->encoded_type_info, tag->encoded_type_info_size);
-    data += tag->encoded_type_info_size;
+    if(!tag->is_bit) {
+        mem_copy(data, tag->encoded_type_info, tag->encoded_type_info_size);
+        data += tag->encoded_type_info_size;
+    }
 
     /* now copy the data to write */
-    mem_copy(data,tag->data,tag->size);
-    data += tag->size;
+    if(!tag->is_bit) {
+        mem_copy(data, tag->data, tag->size);
+        data += tag->size;
+    } else {
+        /* AND mask: if mask bit == 0 then the bit is set to 0 */
+        for(int i=0; i < tag->elem_size; i++) {
+            if((tag->bit / 8) == i) {
+                /* Always reset the tag data bit since OR mask will set it later on */
+                uint8_t mask = (uint8_t)(1 << (tag->bit % 8));
+
+                *data = ((uint8_t)0xFF) ^ mask;
+
+                pdebug(DEBUG_DETAIL, "adding AND mask byte %d: %x", i, *data);
+
+                data++;
+            } else {
+                /* this is not the data we care about. */
+                *data = (uint8_t)0xFF;
+
+                pdebug(DEBUG_DETAIL, "adding AND mask byte %d: %x", i, *data);
+
+                data++;
+            }
+        }
+
+        /* OR mask: if mask bit == 1 then the bit is set to 1 */
+        for(int i=0; i < tag->elem_size; i++) {
+            if((tag->bit / 8) == i) {
+                /* The value at target bit will always be tag data bit's value */
+                *data = tag->data[i] & (uint8_t)(1 << (tag->bit % 8));
+
+                pdebug(DEBUG_DETAIL, "adding OR mask byte %d: %x", i, *data);
+
+                data++;
+            } else {
+                /* this is not the data we care about. */
+                *data = (uint8_t)0x00;
+
+                pdebug(DEBUG_DETAIL, "adding OR mask byte %d: %x", i, *data);
+
+                data++;
+            }
+        }
+    }
 
     /* if this is not an multiple of 16-bit chunks, pad it out */
     if((data - embed_start) & 0x01) {

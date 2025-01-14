@@ -103,6 +103,7 @@
 #define AB_EIP_PLC5_RMW_FUNC ((uint8_t)0x26)
 #define AB_EIP_PCCCLGX_TYPED_READ_FUNC ((uint8_t)0x68)
 #define AB_EIP_PCCCLGX_TYPED_WRITE_FUNC ((uint8_t)0x67)
+#define AB_EIP_PCCCLGX_RMW_FUNC ((uint8_t)0x26)
 #define AB_EIP_SLC_RANGE_READ_FUNC ((uint8_t)0xA2)
 #define AB_EIP_SLC_RANGE_WRITE_FUNC ((uint8_t)0xAA)
 #define AB_EIP_SLC_RANGE_BIT_WRITE_FUNC ((uint8_t)0xAB)
